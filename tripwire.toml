@@ -1,0 +1,21 @@
+# Providers "local" (Ollama on localhost) and "mock" are built in.
+# Add more here; keys are read from the named environment variable, never stored.
+#
+# [provider.lmstudio]
+# kind     = "openai_compat"
+# base_url = "http://localhost:1234/v1"
+#
+# [provider.groq]
+# kind        = "openai_compat"
+# base_url    = "https://api.groq.com/openai/v1"
+# api_key_env = "GROQ_API_KEY"
+
+[suite.banking-intent]
+dataset = "datasets/banking77/gate.jsonl"
+target  = "targets/banking_intent.toml"
+reps    = 1
+
+[suite.banking-intent-dev]
+dataset = "datasets/banking77/dev.jsonl"
+target  = "targets/banking_intent.toml"
+reps    = 1
