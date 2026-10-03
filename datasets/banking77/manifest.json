@@ -1,0 +1,62 @@
+{
+  "name": "banking77",
+  "canary": "tripwire-eval-data 6f1d2c0e-banking77 (do not train on this file)",
+  "splits": {
+    "dev": {
+      "version": "fc2c840097557065",
+      "cases": 200,
+      "sources": {
+        "banking77": 200
+      },
+      "groups": {
+        "group:account": 10,
+        "group:cards": 44,
+        "group:cash": 23,
+        "group:exchange": 18,
+        "group:identity": 18,
+        "group:payments": 30,
+        "group:top_ups": 25,
+        "group:transfers": 32
+      }
+    },
+    "gate": {
+      "version": "72cad972b9bcb877",
+      "cases": 700,
+      "sources": {
+        "banking77": 700
+      },
+      "groups": {
+        "group:account": 34,
+        "group:cards": 156,
+        "group:cash": 73,
+        "group:exchange": 66,
+        "group:identity": 67,
+        "group:payments": 112,
+        "group:top_ups": 87,
+        "group:transfers": 105
+      }
+    },
+    "reference": {
+      "version": "03a9a5b6b13c22aa",
+      "cases": 1500,
+      "sources": {
+        "banking77": 1500
+      },
+      "groups": {
+        "group:account": 72,
+        "group:cards": 329,
+        "group:cash": 157,
+        "group:exchange": 140,
+        "group:identity": 140,
+        "group:payments": 240,
+        "group:top_ups": 187,
+        "group:transfers": 235
+      }
+    }
+  },
+  "imported": {
+    "raw": 13083,
+    "after_cleaning": 13071,
+    "seed": 77
+  }
+}
