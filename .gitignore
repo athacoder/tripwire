@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local results: every sample can be regenerated from the config
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets and editor state
+.env
+.vscode/
+.idea/

@@ -1,0 +1,2 @@
+# Prompt and dataset bytes feed content hashes, so line endings must not vary by platform.
+* text=auto eol=lf
