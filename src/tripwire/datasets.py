@@ -21,7 +21,7 @@ def load(path: Path) -> list[Case]:
 def save(path: Path, cases: list[Case]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = "\n".join(c.model_dump_json(exclude_defaults=True) for c in cases)
-    path.write_text(body + "\n", encoding="utf-8")
+    path.write_text(body + "\n", encoding="utf-8", newline="\n")  # same bytes on every OS
 
 
 def version(cases: list[Case]) -> str:

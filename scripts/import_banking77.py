@@ -93,7 +93,9 @@ def main() -> None:
 
     manifest = datasets.manifest("banking77", splits, CANARY)
     manifest["imported"] = {"raw": len(raw), "after_cleaning": len(cases), "seed": SEED}
-    (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    (OUT / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
 
     if not PROMPT.exists():  # never overwrite a prompt that has been edited by hand
         rng = random.Random(SEED)
@@ -105,7 +107,9 @@ def main() -> None:
         examples = "\n\n".join(f"Message: {c.text}\nIntent: {c.expected}" for c in shots)
         PROMPT.parent.mkdir(parents=True, exist_ok=True)
         PROMPT.write_text(
-            f"{INSTRUCTIONS}\nIntents:\n{intents}\n\nExamples:\n\n{examples}\n", encoding="utf-8"
+            f"{INSTRUCTIONS}\nIntents:\n{intents}\n\nExamples:\n\n{examples}\n",
+            encoding="utf-8",
+            newline="\n",
         )
 
     print(f"{len(raw)} rows, {len(cases)} after cleaning, {len(spare)} left out of every split")
