@@ -39,19 +39,22 @@ class Target:
         self.template = _read(root, cfg.template) or "{text}"
         self.http = HttpProvider("") if cfg.kind == "http" else None
         self.fn: Any = None
-        if cfg.kind == "python" and cfg.entry:
+        if cfg.kind == "python":
+            if not cfg.entry or ":" not in cfg.entry:
+                raise ValueError('a python target needs entry = "module:function"')
             sys.path.insert(0, str(root))
             module, _, name = cfg.entry.partition(":")
             self.fn = getattr(importlib.import_module(module), name)
+        if cfg.kind == "http" and not cfg.url:
+            raise ValueError("an http target needs a url")
 
         files = sorted({p for glob in cfg.watch for p in root.glob(glob) if p.is_file()})
         # Everything that can change the output. Prompt text is hashed exactly as read
         # (newlines normalised so Windows and Linux checkouts agree); whitespace is not
         # collapsed, because reformatting a prompt can change what the model says.
-        self.spec: dict[str, Any] = {
+        static: dict[str, Any] = {
             **cfg.model_dump(exclude={"system", "template", "watch", "provider"}),
             "provider_kind": provider_kind,
-            "digest": digest,
             "system": self.system,
             "template": self.template,
             "watched": {
@@ -61,14 +64,27 @@ class Target:
                 for p in files
             },
         }
+        # The static key needs no running backend, so CI can compute it; the fingerprint
+        # adds the model digest, which only the machine holding the model knows.
+        self.static_key = sha(json.dumps(static, sort_keys=True))
+        self.spec: dict[str, Any] = {**static, "digest": digest}
         self.fingerprint = sha(json.dumps(self.spec, sort_keys=True))
+
+    def render(self, case: Case) -> str:
+        try:
+            return self.template.format_map(case.input)
+        except (KeyError, IndexError, ValueError) as e:
+            raise ValueError(
+                f"user template cannot be filled from case input {sorted(case.input)}: {e!r}. "
+                "Literal braces in a template must be doubled."
+            ) from e
 
     def request(self, case: Case, seed: int) -> Request:
         c = self.cfg
         return Request(
             model=c.model,
             system=self.system,
-            user=self.template.format_map(case.input),
+            user=self.render(case),
             temperature=c.temperature,
             seed=seed,
             num_ctx=c.num_ctx,
@@ -84,7 +100,7 @@ class Target:
         """
         if self.cfg.kind != "prompt" or not cases:
             return
-        longest = max(len(self.system) + len(self.template.format_map(c.input)) for c in cases)
+        longest = max(len(self.system) + len(self.render(c)) for c in cases)
         need = longest // 3 + self.cfg.max_tokens  # 3 chars per token overestimates English
         if need > self.cfg.num_ctx:
             raise ValueError(
@@ -105,5 +121,6 @@ class Target:
         return Response(text=str(out), model=self.cfg.entry or self.cfg.url or "")
 
     async def aclose(self) -> None:
+        await self.provider.aclose()
         if self.http:
             await self.http.aclose()

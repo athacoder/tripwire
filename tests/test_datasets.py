@@ -86,3 +86,10 @@ def test_split_is_stratified_by_first_tag():
 def test_split_refuses_to_oversample():
     with pytest.raises(ValueError):
         datasets.split(make_cases(5), {"a": 6})
+
+
+def test_a_bad_line_is_reported_with_its_number(tmp_path):
+    path = tmp_path / "d.jsonl"
+    path.write_text('{"input": {"text": "ok"}, "expected": "a"}\n{"expected": "no input"}\n')
+    with pytest.raises(ValueError, match=r"d\.jsonl:2"):
+        datasets.load(path)

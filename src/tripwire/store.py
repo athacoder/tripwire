@@ -32,6 +32,17 @@ MIGRATIONS = [
         fingerprint TEXT NOT NULL, reps INTEGER NOT NULL, git_sha TEXT, env TEXT NOT NULL,
         started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL);
     """,
+    # Scores carry the scorer's version: improving a scorer adds rows, it never rewrites history.
+    """
+    CREATE TABLE scores(
+        fingerprint TEXT NOT NULL, case_hash TEXT NOT NULL, rep INTEGER NOT NULL,
+        scorer TEXT NOT NULL, version TEXT NOT NULL, metric TEXT NOT NULL,
+        value REAL NOT NULL, detail TEXT,
+        PRIMARY KEY(fingerprint, case_hash, rep, scorer, version, metric));
+    CREATE TABLE comparisons(
+        id INTEGER PRIMARY KEY, suite TEXT NOT NULL, base TEXT NOT NULL, head TEXT NOT NULL,
+        verdict TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL);
+    """,
 ]
 
 

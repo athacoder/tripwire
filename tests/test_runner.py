@@ -184,3 +184,56 @@ def test_cli_runs_a_suite_end_to_end(project):
     assert "80 cached, 0 generated" in cli.invoke(app, ["run", "demo", *config]).output
     assert cli.invoke(app, ["run", "nope", *config]).exit_code == 2
     assert cli.invoke(app, ["dataset", "lint", str(project.root / "data.jsonl")]).exit_code == 0
+
+
+def test_a_crashing_target_is_recorded_and_the_run_continues(project):
+    (project.root / "flaky_app.py").write_text(
+        "def answer(case):\n"
+        "    if case['text'].endswith('3'):\n"
+        "        raise RuntimeError('bug in the app')\n"
+        "    return 'fine'\n"
+    )
+    (project.root / "target.toml").write_text('kind = "python"\nentry = "flaky_app:answer"\n')
+    summary = asyncio.run(run_suite(project, "demo"))
+    assert summary.errors == 8 and summary.statuses["ok"] == TOTAL - 8  # cases 3, 13, 23, 33
+    assert {r["kind"] for r in rows(project, "errors")} == {"target_error"}
+    assert "bug in the app" in rows(project, "errors")[0]["message"]
+
+
+def test_a_malformed_reply_is_an_error_not_a_crash(project):
+    class Broken(Scripted):
+        async def complete(self, r):
+            return {}["message"]  # what a reply missing its fields does to the parser
+
+    summary = run(project, Broken(), limit=1)
+    assert summary.errors == 2 and not rows(project, "samples")
+
+
+def test_a_fatal_error_stops_concurrent_work_cleanly(project):
+    project.concurrency = 8
+    with pytest.raises(ProviderError, match="served by"):
+        run(project, Scripted(reply=Response("x", "some-other-model"), delay=0.01))
+    assert rows(project, "runs")[0]["status"] == "aborted"
+
+
+def test_a_killed_run_is_marked_aborted_by_the_next_one(project):
+    run(project, limit=1)
+    db = store.connect(project.db_path)
+    db.execute("UPDATE runs SET status='running'")
+    db.commit()
+    run(project)
+    assert [r["status"] for r in rows(project, "runs")] == ["aborted", "complete"]
+
+
+def test_a_template_that_does_not_match_the_cases_is_explained(project):
+    (project.root / "user.md").write_text("Question: {question}")
+    (project.root / "target.toml").write_text(
+        'provider = "mock"\nmodel = "mock:0.8"\ntemplate = "user.md"\n'
+    )
+    with pytest.raises(ValueError, match="cannot be filled"):
+        run(project)
+
+
+def test_an_unknown_suite_lists_the_known_ones(project):
+    with pytest.raises(ValueError, match="known: demo"):
+        asyncio.run(run_suite(project, "nope"))

@@ -74,11 +74,18 @@ class HttpProvider(Provider):
         try:
             reply = await self.client.request(method, path, json=body)
         except httpx.TransportError as e:
-            raise ProviderError(f"{type(e).__name__}: {e}", retryable=True) from e
+            where = f"{self.client.base_url}{path}"
+            raise ProviderError(
+                f"cannot reach {where} ({type(e).__name__}). Is the model server running?",
+                retryable=True,
+            ) from e
         if reply.status_code >= 400:
             retryable = reply.status_code in (408, 429) or reply.status_code >= 500
             raise ProviderError(f"HTTP {reply.status_code}: {reply.text[:200]}", retryable)
-        return reply.json()
+        try:
+            return reply.json()
+        except ValueError as e:  # a proxy error page, or a truncated body
+            raise ProviderError(f"reply is not JSON: {reply.text[:200]!r}", kind="malformed") from e
 
     async def aclose(self) -> None:
         await self.client.aclose()
@@ -113,7 +120,8 @@ class Ollama(HttpProvider):
 
     async def digest(self, model: str) -> str:
         tags = await self.call("GET", "/api/tags")
-        found = [m["digest"] for m in tags["models"] if m["name"] == model]
+        # Ollama treats a bare name as ":latest", so accept either spelling.
+        found = [m["digest"] for m in tags["models"] if m["name"] in (model, f"{model}:latest")]
         if not found:
             raise ProviderError(f"model {model!r} is not pulled; run: ollama pull {model}")
         return found[0]

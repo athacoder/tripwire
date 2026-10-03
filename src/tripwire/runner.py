@@ -38,7 +38,7 @@ class Summary:
     projected_minutes: float | None = None
 
 
-def _now() -> str:
+def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
@@ -49,8 +49,23 @@ def _git_sha(root: Path) -> str | None:
             for cmd in (["git", "rev-parse", "HEAD"], ["git", "status", "--porcelain"])
         ]
     except (OSError, subprocess.CalledProcessError):
-        return None
+        return None  # not a git checkout, or git is missing: the run is still valid
     return out[0] + ("-dirty" if out[1] else "")
+
+
+async def resolve(cfg: Config, name: str, provider: Provider | None = None) -> Target:
+    """Build a suite's target, asking the backend for the model digest it needs."""
+    tcfg = cfg.target(name)
+    is_prompt = tcfg.kind == "prompt"
+    if is_prompt and tcfg.provider not in cfg.provider:
+        raise ValueError(f"target uses unknown provider {tcfg.provider!r}")
+    kind = cfg.provider[tcfg.provider].kind if is_prompt else ""
+    provider = provider or (make_provider(cfg.provider[tcfg.provider]) if is_prompt else Provider())
+    try:
+        return Target(tcfg, cfg.root, provider, kind, await provider.digest(tcfg.model))
+    except BaseException:
+        await provider.aclose()
+        raise
 
 
 async def run_suite(
@@ -62,19 +77,13 @@ async def run_suite(
     dry_run: bool = False,
     provider: Provider | None = None,
 ) -> Summary:
-    suite, tcfg = cfg.suite[name], cfg.target(name)
+    suite = cfg.get_suite(name)
     cases = datasets.load(cfg.root / suite.dataset)[:limit]
-    is_prompt = tcfg.kind == "prompt"
-    pcfg = cfg.provider[tcfg.provider]
-    provider = provider or (make_provider(pcfg) if is_prompt else Provider())
-    target = None
+    target = await resolve(cfg, name, provider)
+    db = store.connect(cfg.db_path)
     try:
-        digest = await provider.digest(tcfg.model)
-        target = Target(tcfg, cfg.root, provider, pcfg.kind if is_prompt else "", digest)
         target.guard(cases)
-        fp = target.fingerprint
-
-        db = store.connect(cfg.root / cfg.db)
+        fp, model = target.fingerprint, target.cfg.model
         have = {
             tuple(r)
             for r in db.execute("SELECT case_hash, rep FROM samples WHERE fingerprint=?", (fp,))
@@ -89,6 +98,10 @@ async def run_suite(
             s.projected_minutes = mean * len(todo) / 60_000 if mean else None
             return s
 
+        # A run row still marked "running" belongs to a process that was killed.
+        db.execute(
+            "UPDATE runs SET status='aborted' WHERE status='running' AND fingerprint=?", (fp,)
+        )
         store.insert(
             db, "targets", [{"fingerprint": fp, "spec": json.dumps(target.spec)}], "OR IGNORE"
         )
@@ -118,6 +131,7 @@ async def run_suite(
             "python": platform.python_version(),
             "platform": platform.platform(),
             "tripwire": __version__,
+            "provider": target.spec["provider_kind"] or target.cfg.kind,
         }
         store.insert(
             db,
@@ -131,7 +145,7 @@ async def run_suite(
                     "reps": suite.reps,
                     "git_sha": _git_sha(cfg.root),
                     "env": json.dumps(env),
-                    "started_at": _now(),
+                    "started_at": now(),
                     "status": "running",
                 }
             ],
@@ -150,27 +164,34 @@ async def run_suite(
                     try:
                         resp = await asyncio.wait_for(target.run(case, rep), cfg.timeout)
                         break
-                    except (ProviderError, TimeoutError) as e:
+                    except Exception as e:
                         if getattr(e, "retryable", False) and attempt <= cfg.retries:
                             delay = min(30.0, cfg.backoff * 2 ** (attempt - 1))
                             await asyncio.sleep(delay * random.uniform(0.5, 1.5))
                             continue
                         # A failed request is not a wrong answer: it never becomes a sample.
+                        # That includes a malformed reply or a crash inside a python target;
+                        # one bad case must not take the whole run down.
+                        kind = (
+                            "timeout"
+                            if isinstance(e, TimeoutError)
+                            else getattr(e, "kind", "target_error")
+                        )
                         error = {
                             **key,
                             "attempts": attempt,
-                            "kind": getattr(e, "kind", "timeout"),
-                            "message": str(e)[:500],
-                            "created_at": _now(),
+                            "kind": kind,
+                            "message": f"{type(e).__name__}: {e}"[:500],
+                            "created_at": now(),
                         }
                         store.insert(db, "errors", [error])
                         s.errors += 1
                         s.pending -= 1
                         return
                 wall_ms = (time.perf_counter() - start) * 1000  # final attempt only
-                if is_prompt and not resp.model.startswith(tcfg.model):
+                if target.cfg.kind == "prompt" and not resp.model.startswith(model):
                     raise ProviderError(
-                        f"asked for {tcfg.model!r}, served by {resp.model!r}", kind="model_mismatch"
+                        f"asked for {model!r}, served by {resp.model!r}", kind="model_mismatch"
                     )
                 status = {"length": "truncated", "refusal": "refusal"}.get(resp.stop, "ok")
                 latency = resp.latency_ms if resp.latency_ms is not None else wall_ms
@@ -185,7 +206,7 @@ async def run_suite(
                     "latency_ms": latency,
                     "attempts": attempt,
                     "response": json.dumps(resp.raw),
-                    "created_at": _now(),
+                    "created_at": now(),
                 }
                 store.insert(db, "samples", [sample])
                 s.statuses[status] += 1
@@ -195,22 +216,24 @@ async def run_suite(
                 s.pending -= 1
 
         status = "aborted"
+        tasks = [asyncio.ensure_future(one(c, rep)) for c, rep in todo]
         try:
-            await asyncio.gather(*(one(c, rep) for c, rep in todo))
-            if await provider.digest(tcfg.model) != digest:
+            await asyncio.gather(*tasks)
+            if await target.provider.digest(model) != target.spec["digest"]:
                 raise ProviderError("model digest changed during the run", kind="model_mismatch")
-            env.update({"provider": pcfg.kind if is_prompt else tcfg.kind})
-            env.update(await provider.info(tcfg.model))
+            env.update(await target.provider.info(model))
             status = "partial" if s.pending or s.errors else "complete"
         finally:
+            # On a fatal error, stop the siblings before the database handle goes away.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             db.execute(
                 "UPDATE runs SET finished_at=?, status=?, env=? WHERE run_id=?",
-                (_now(), status, json.dumps(env), run_id),
+                (now(), status, json.dumps(env), run_id),
             )
             db.commit()
-            db.close()
         return s
     finally:
-        await provider.aclose()
-        if target:
-            await target.aclose()
+        db.close()
+        await target.aclose()

@@ -8,6 +8,7 @@ from collections.abc import Coroutine
 from pathlib import Path
 from typing import Annotated, Any
 
+import httpx
 import typer
 
 from . import __version__, datasets, store
@@ -95,7 +96,7 @@ def bench(
     """Measure throughput on a few cases and project how long each split will take."""
     cfg = load_config(config)
     s = _execute(run_suite(cfg, suite, limit=n))
-    db = store.connect(cfg.root / cfg.db)
+    db = store.connect(cfg.db_path)
     rows = db.execute(
         "SELECT latency_ms, response FROM samples WHERE fingerprint=?", (s.fingerprint,)
     ).fetchall()
@@ -119,8 +120,8 @@ def bench(
         "output speed": rate("eval_count", "eval_duration"),
         "runtime": json.loads(env["env"]) if env else "-",
     }
-    reps = cfg.suite[suite].reps
-    for path in sorted((cfg.root / cfg.suite[suite].dataset).parent.glob("*.jsonl")):
+    reps = cfg.get_suite(suite).reps
+    for path in sorted((cfg.root / cfg.get_suite(suite).dataset).parent.glob("*.jsonl")):
         cases = len(datasets.load(path))
         report[f"projected {path.stem}"] = f"{cases * reps * seconds / 60:.1f} min ({cases} cases)"
     _show(report)
@@ -175,8 +176,11 @@ def lint_cmd(
     ok = report.pop("ok")
     report["near_duplicates (warning)"] = len(near)
     if embed:
-        pairs = datasets.embedding_near_duplicates(cases, base_url)
-        report["embedding_near_duplicates (warning)"] = len(pairs)
+        try:
+            pairs = datasets.embedding_near_duplicates(cases, base_url)
+            report["embedding_near_duplicates (warning)"] = len(pairs)
+        except (httpx.HTTPError, KeyError) as e:  # optional check: never block the lint on it
+            report["embedding_near_duplicates (warning)"] = f"skipped ({type(e).__name__})"
     _show(report)
     for i, j in near[:5]:
         typer.echo(f"  near: {cases[i].text!r} ~ {cases[j].text!r}")
@@ -192,7 +196,10 @@ def split_cmd(
     seed: int = 0,
 ) -> None:
     """Draw disjoint, stratified random splits from a dataset."""
-    sizes = {name: int(count) for name, count in (item.split("=") for item in size)}
+    try:
+        sizes = {name: int(count) for name, count in (item.split("=") for item in size)}
+    except ValueError as e:
+        raise typer.BadParameter("each --size must look like name=count") from e
     for name, cases in datasets.split(datasets.load(src), sizes, seed).items():
         datasets.save(out / f"{name}.jsonl", cases)
         typer.echo(f"{name}: {len(cases)} cases, version {datasets.version(cases)}")

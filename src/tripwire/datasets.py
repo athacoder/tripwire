@@ -14,8 +14,14 @@ from .models import Case, sha
 
 
 def load(path: Path) -> list[Case]:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return [Case.model_validate_json(line) for line in lines if line.strip()]
+    cases = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if line.strip():
+            try:
+                cases.append(Case.model_validate_json(line))
+            except ValueError as e:  # say which line, the parser alone does not
+                raise ValueError(f"{path}:{number}: not a valid case: {e}") from e
+    return cases
 
 
 def save(path: Path, cases: list[Case]) -> None:

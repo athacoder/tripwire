@@ -34,9 +34,19 @@ class TargetCfg(BaseModel):
 
 
 class SuiteCfg(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     dataset: str
     target: str
     reps: int = 1
+    scorers: list[str] = Field(default_factory=lambda: ["exact"])
+    primary_metric: str = "exact.pass"  # "<scorer>.<metric>"; this one decides the verdict
+    alpha: float = 0.05  # one-sided error rate of each interval bound
+    margin: float = 0.03  # largest drop in the primary metric that is still acceptable
+    on_inconclusive: Literal["fail", "warn"] = "fail"
+    # Limits on the candidate: output_tokens_ratio_max, latency_p95_ratio_max,
+    # truncation_rate_max, error_rate_max.
+    guardrails: dict[str, float] = Field(default_factory=dict)
 
 
 def _default_providers() -> dict[str, ProviderCfg]:
@@ -46,6 +56,7 @@ def _default_providers() -> dict[str, ProviderCfg]:
 class Config(BaseModel):
     root: Path
     db: str = "tripwire.db"
+    bundles: str = "bundles"
     concurrency: int = 1  # local models share one GPU; raise it for hosted providers
     timeout: float = 120.0  # hard wall-clock limit per case, in seconds
     retries: int = 3
@@ -53,8 +64,18 @@ class Config(BaseModel):
     provider: dict[str, ProviderCfg] = Field(default_factory=_default_providers)
     suite: dict[str, SuiteCfg] = Field(default_factory=dict)
 
+    @property
+    def db_path(self) -> Path:
+        return self.root / self.db  # an absolute `db` wins, as pathlib joins go
+
+    def get_suite(self, name: str) -> SuiteCfg:
+        if name not in self.suite:
+            known = ", ".join(sorted(self.suite)) or "none defined"
+            raise ValueError(f"unknown suite {name!r} (known: {known})")
+        return self.suite[name]
+
     def target(self, suite: str) -> TargetCfg:
-        path = self.root / self.suite[suite].target
+        path = self.root / self.get_suite(suite).target
         return TargetCfg(**tomllib.loads(path.read_text(encoding="utf-8")))
 
 

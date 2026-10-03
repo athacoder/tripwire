@@ -119,3 +119,16 @@ def test_mock_is_deterministic_and_hits_its_pass_rate():
     rate = sum(passed("mock:0.8", i) for i in range(2000)) / 2000
     assert abs(rate - 0.8) < 0.03
     assert sum(passed("mock:0.6", i) for i in range(2000)) / 2000 < rate - 0.1
+
+
+def test_a_reply_that_is_not_json_is_a_provider_error():
+    provider = Ollama("http://x", transport=serve(lambda r: httpx.Response(200, text="<html>")))
+    with pytest.raises(ProviderError, match="not JSON") as caught:
+        asyncio.run(provider.complete(REQUEST))
+    assert not caught.value.retryable
+
+
+def test_a_bare_model_name_matches_the_latest_tag():
+    tags = {"models": [{"name": "nomic-embed-text:latest", "digest": "abc"}]}
+    provider = Ollama("http://x", transport=serve(lambda r: httpx.Response(200, json=tags)))
+    assert asyncio.run(provider.digest("nomic-embed-text")) == "abc"
