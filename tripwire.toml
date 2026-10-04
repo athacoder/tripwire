@@ -10,12 +10,39 @@
 # base_url    = "https://api.groq.com/openai/v1"
 # api_key_env = "GROQ_API_KEY"
 
+# The gated suite: 700 cases, one repetition, a 3-point tolerance.
 [suite.banking-intent]
+dataset        = "datasets/banking77/gate.jsonl"
+target         = "targets/banking_intent.toml"
+scorers        = ["exact"]
+primary_metric = "exact.pass"
+alpha          = 0.05
+margin         = 0.03
+
+[suite.banking-intent.guardrails]
+output_tokens_ratio_max = 1.25
+latency_p95_ratio_max   = 1.50
+truncation_rate_max     = 0.01
+error_rate_max          = 0.02
+
+# The same target with two repetitions: measures run-to-run noise (tripwire aa, power).
+[suite.banking-intent-aa]
 dataset = "datasets/banking77/gate.jsonl"
 target  = "targets/banking_intent.toml"
-reps    = 1
+reps    = 2
+
+# A deliberately weaker variant, for `tripwire compare`: the few-shot examples removed.
+[suite.banking-intent-zero-shot]
+dataset = "datasets/banking77/gate.jsonl"
+target  = "targets/banking_intent_zero_shot.toml"
 
 [suite.banking-intent-dev]
 dataset = "datasets/banking77/dev.jsonl"
 target  = "targets/banking_intent.toml"
-reps    = 1
+
+# Structured extraction with a continuous metric. Answers are known by construction.
+[suite.invoice-extract]
+dataset        = "datasets/invoices/extract.jsonl"
+target         = "targets/invoice_extract.toml"
+scorers        = ["field_f1"]
+primary_metric = "field_f1.f1"
