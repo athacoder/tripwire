@@ -53,14 +53,24 @@ def _git_sha(root: Path) -> str | None:
     return out[0] + ("-dirty" if out[1] else "")
 
 
+def _provider_kind(cfg: Config, name: str) -> str:
+    tcfg = cfg.target(name)
+    if tcfg.kind != "prompt":
+        return ""
+    if tcfg.provider not in cfg.provider:
+        raise ValueError(f"target uses unknown provider {tcfg.provider!r}")
+    return cfg.provider[tcfg.provider].kind
+
+
+def offline_target(cfg: Config, name: str) -> Target:
+    """A suite's target without contacting any backend: enough for its static key."""
+    return Target(cfg.target(name), cfg.root, Provider(), _provider_kind(cfg, name))
+
+
 async def resolve(cfg: Config, name: str, provider: Provider | None = None) -> Target:
     """Build a suite's target, asking the backend for the model digest it needs."""
-    tcfg = cfg.target(name)
-    is_prompt = tcfg.kind == "prompt"
-    if is_prompt and tcfg.provider not in cfg.provider:
-        raise ValueError(f"target uses unknown provider {tcfg.provider!r}")
-    kind = cfg.provider[tcfg.provider].kind if is_prompt else ""
-    provider = provider or (make_provider(cfg.provider[tcfg.provider]) if is_prompt else Provider())
+    tcfg, kind = cfg.target(name), _provider_kind(cfg, name)
+    provider = provider or (make_provider(cfg.provider[tcfg.provider]) if kind else Provider())
     try:
         return Target(tcfg, cfg.root, provider, kind, await provider.digest(tcfg.model))
     except BaseException:

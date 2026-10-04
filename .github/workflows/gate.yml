@@ -1,0 +1,51 @@
+name: gate
+
+# Re-checks the regression gate from committed sample bundles. No model runs here and no
+# secrets are used: the samples were generated on a machine with the model, and this job
+# recomputes the fingerprints from the files in the pull request and redoes the statistics.
+
+on:
+  pull_request:
+    paths:
+      - "prompts/**"
+      - "targets/**"
+      - "datasets/**"
+      - "bundles/**"
+      - "tripwire.toml"
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the gate reads the base branch's files
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+      - id: gate
+        run: |
+          set +e
+          tripwire gate banking-intent --base "origin/${{ github.base_ref }}" --verify-only --out gate.md
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat gate.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Comment on the pull request
+        continue-on-error: true # forks get a read-only token; the job summary still has the report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file gate.md --edit-last --create-if-none
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gate-report
+          path: gate.md
+      - run: exit "${{ steps.gate.outputs.code }}"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import importlib
+import importlib.util
 import inspect
 import json
 import sys
@@ -42,9 +42,18 @@ class Target:
         if cfg.kind == "python":
             if not cfg.entry or ":" not in cfg.entry:
                 raise ValueError('a python target needs entry = "module:function"')
-            sys.path.insert(0, str(root))
             module, _, name = cfg.entry.partition(":")
-            self.fn = getattr(importlib.import_module(module), name)
+            source = root / (module.replace(".", "/") + ".py")
+            # Load by file path under a root-specific name: the gate loads the same module
+            # from two checkouts, and a plain import would hand back the first one twice.
+            unique = f"_tripwire_{sha(str(root))}_{module.replace('.', '_')}"
+            spec = importlib.util.spec_from_file_location(unique, source)
+            if spec is None or spec.loader is None or not source.is_file():
+                raise ValueError(f"python target not found: {source}")
+            loaded = importlib.util.module_from_spec(spec)
+            sys.path.insert(0, str(root))  # so the module's own imports resolve
+            spec.loader.exec_module(loaded)
+            self.fn = getattr(loaded, name)
         if cfg.kind == "http" and not cfg.url:
             raise ValueError("an http target needs a url")
 
