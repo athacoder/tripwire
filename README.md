@@ -4,27 +4,67 @@ A statistical regression gate for LLM systems: run the old and the new version o
 prompt or pipeline on the same test cases, and block the change when the new one is
 measurably worse.
 
-LLM outputs are samples, not return values. "Accuracy went from 84% to 82%" might be a
+LLM outputs are samples, not return values. "Accuracy went from 60% to 55%" might be a
 real regression or might be noise, and a fixed threshold cannot tell the difference.
 Tripwire treats an eval as a paired experiment and reports the difference with a
-confidence interval.
+confidence interval and one of four verdicts.
 
 Everything runs locally against open models through [Ollama](https://ollama.com). No API
 key is needed.
 
-## Status
+## What a blocked change looks like
 
-Early. The data layer and the runner work end to end; the statistics and the CI gate are
-next.
+Removing the few-shot examples from the Banking77 prompt, gated against the previous
+commit (`tripwire gate banking-intent --base HEAD`, 700 cases, `gemma3:4b`; output abridged):
+
+```text
+Tripwire: REGRESSED · banking-intent        This blocks the merge.
+
+| metric     | base  | head  | Δ      | 90% interval     | p      |
+| exact.pass | 0.596 | 0.550 | -0.046 | [-0.067, -0.024] | 0.0010 |
+
+margin 0.030 · α 0.05 · paired on 700 of 700 cases · McNemar p 0.0007
+
+Guardrails   output tokens 0.930 (limit 1.25) ok · latency p95 1.272 (limit 1.5) ok
+Flips        59 broke · 27 fixed · 358 stable pass · 256 stable fail
+
+Broke (top 10 of 59)
+| input                                        | expected          | base said         | head said             |
+| What's the process for topping up by card?   | topping_up_by_card| topping_up_by_card| top_up_by_card        |
+| I cannot get my google pay to work.          | apple_pay_or_...  | apple_pay_or_...  | contactless_not_working|
+```
+
+The second run of the same command makes zero model calls: every sample is cached.
+
+## Verdicts
+
+The candidate has to show it is *not worse than the baseline by more than a margin you
+chose in advance*. With too little data the answer is `INCONCLUSIVE`, never a silent pass.
+
+| Verdict | Meaning | Exit code |
+|---|---|---|
+| `IMPROVED` | confidently better | 0 |
+| `PASS` | any drop is confidently smaller than the margin | 0 |
+| `UNCHANGED` | nothing that affects the output changed; no model is called | 0 |
+| `REGRESSED` | confidently worse, possibly beyond the margin | 1 |
+| `INCONCLUSIVE` | cannot tell "fine" from "too much worse" | 2 (configurable) |
+| `INVALID` | too many cases failed to produce a scorable answer | 3 |
+
+A guardrail over its limit or a slice that regressed significantly also blocks, with exit
+code 1. The method is described in [docs/methodology.md](docs/methodology.md).
+
+## Status
 
 | Piece | State |
 |---|---|
 | Datasets: content-hashed cases, versioning, lint, stratified splits | done |
 | Runner: resumable, seeded, cached samples; Ollama and OpenAI-compatible backends | done |
-| Scorers and single-run reports | next |
-| Paired comparison, verdicts, power analysis | planned |
-| CI gate with pull-request comments | planned |
+| Scorers, eval self-check, single-run report | done |
+| Paired comparison, verdicts, slices, guardrails, power analysis, A/A calibration | done |
+| Gate against a git ref, sample bundles, CI workflow with a pull-request comment | done |
 | LLM judge with calibration against human labels | planned |
+| Benchmark of the gate itself on seeded regressions | planned |
+| Dashboard | planned |
 
 ## Quick start
 
@@ -38,9 +78,10 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 
 tripwire doctor                          # is the model reachable and on the GPU?
-tripwire bench banking-intent            # measure throughput, project run times
-tripwire run banking-intent              # generate every missing sample
-tripwire run banking-intent              # a second run makes zero model calls
+tripwire selfcheck banking-intent        # is the eval itself sound?
+tripwire run banking-intent              # generate and score every missing sample
+tripwire report banking-intent           # score with an interval, slices, worst cases
+tripwire compare banking-intent banking-intent-zero-shot
 ```
 
 The tests need neither Ollama nor a GPU:
@@ -48,6 +89,49 @@ The tests need neither Ollama nor a GPU:
 ```bash
 pytest -q
 ```
+
+## Gating a change
+
+Edit a prompt or a target, then:
+
+```bash
+tripwire gate banking-intent --base origin/main            # runs both sides, prints the verdict
+tripwire gate banking-intent --base origin/main --bundle   # also writes bundles/ to commit
+```
+
+`--base` is any git ref. Tripwire reads the prompt and target files as they were at that
+ref, runs that old target on today's cases, and compares it with the working tree.
+
+CI runners have no GPU, so the gate is split. `--bundle` writes the samples for both sides
+as small gzip files under `bundles/`; commit them with the change. The
+[gate workflow](.github/workflows/gate.yml) then runs `tripwire gate --verify-only`, which
+recomputes each side's key from the files in the pull request, loads the matching bundles,
+redoes the scoring and the statistics, and comments on the pull request. It never calls a
+model and needs no secrets. A bundle made for an older prompt cannot stand in for a changed
+one, because the key is computed from the prompt itself.
+
+What this trusts: that the committed samples really came from the stated model on the
+author's machine. That is fine for a solo project and worth knowing for a team.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `tripwire doctor` | Checks each suite's model is pulled, loads, and how much of it is on the GPU |
+| `tripwire bench SUITE` | Times a few cases and projects the duration of every split |
+| `tripwire run SUITE` | Generates and scores missing samples. `--limit`, `--max-minutes`, `--dry-run` |
+| `tripwire score SUITE` | Re-scores stored samples after a scorer change. Calls no model |
+| `tripwire selfcheck SUITE` | Reference answers must pass and junk answers must fail |
+| `tripwire report SUITE` | Score with an interval, slices, variance split, lowest-scoring cases |
+| `tripwire compare BASE HEAD` | Paired comparison of two suites that share a dataset |
+| `tripwire gate SUITE --base REF` | Compares the working tree (or `--head REF`) against a git ref |
+| `tripwire power SUITE` | Cases needed for a given drop, by formula and by simulation |
+| `tripwire aa SUITE` | Compares a suite with itself to measure the false-alarm rate |
+| `tripwire dataset lint FILE` | Duplicates, conflicting labels, empty fields, leakage into prompts |
+| `tripwire dataset split SRC OUT --size dev=200 ...` | Disjoint stratified splits |
+
+Suites live in `tripwire.toml`; each names a dataset, a target file, its scorers, the
+primary metric, the margin and optional guardrails.
 
 ## How it works
 
@@ -58,35 +142,37 @@ model's digest, the exact prompt text, sampling parameters, context size, and an
 files it declares.
 
 A **sample** is one output, stored under `(fingerprint, case, repetition)`. That one key
-gives three things for free:
+gives caching, resume and baseline lookup for free: an unchanged target never calls the
+model twice, an interrupted run picks up where it stopped, and "the baseline" is simply
+the fingerprint of the target at the base ref.
 
-- **Caching.** An unchanged target never calls the model twice for the same case.
-- **Resume.** An interrupted run picks up only the missing samples.
-- **Baselines.** "The baseline" is simply the fingerprint of the target on the main
-  branch; there is no separate notion of a baseline run.
+Each sample's seed is derived from the case and the repetition, so repetitions are
+distinct draws and a whole run can be regenerated. Deleting 50 stored samples and
+generating them again reproduced all 50 outputs on the reference machine.
 
-Each sample's seed is derived from the case and the repetition index, so repetitions are
-distinct draws and a whole run can be regenerated exactly. On the reference machine,
-deleting 50 stored samples and generating them again reproduced all 50 outputs.
+Failed requests are never scored. A timeout, an HTTP error or a crash inside a target goes
+to an `errors` table, a cut-off answer is stored as `truncated`, and neither is confused
+with a wrong answer. Before a run starts, Tripwire checks that the longest prompt fits the
+context window, because Ollama silently drops whatever does not fit.
 
-Failed requests are never scored. A timeout or an HTTP error goes to an `errors` table,
-a cut-off answer is stored as `truncated`, and neither is confused with a wrong answer.
+**Scores** carry the scorer's version. Changing a scorer adds rows instead of rewriting
+history, and re-scoring stored outputs costs nothing.
 
-Before a run starts, Tripwire checks that the longest prompt fits the context window.
-Ollama silently drops whatever does not fit and answers anyway, which would otherwise
-look like the model getting worse.
+## Measured on the reference machine
 
-## Commands
+RTX 3050 laptop GPU (6 GB), `gemma3:4b`, Banking77 gate split (700 cases).
 
-| Command | What it does |
+| | |
 |---|---|
-| `tripwire doctor` | Checks each suite's model is pulled, loads, and how much of it is on the GPU |
-| `tripwire bench SUITE` | Times a few cases and projects the duration of every split |
-| `tripwire run SUITE` | Generates missing samples. `--limit`, `--max-minutes`, `--dry-run` |
-| `tripwire dataset lint FILE` | Duplicates, conflicting labels, empty fields, leakage into prompts |
-| `tripwire dataset split SRC OUT --size dev=200 --size gate=700` | Disjoint stratified splits |
+| Speed | 0.36 s per case; the gate split runs in about four minutes |
+| Baseline | `exact.pass` 0.596, 90% interval [0.564, 0.626] |
+| Rerun noise | 1.9% of cases change between two repetitions |
+| Where the variance is | 96% between cases, 4% within: add cases, not repetitions |
+| A/A false-alarm rate | 4.4% over 500 self-comparisons (nominal ceiling 10%) |
+| Few-shot examples removed | Δ −0.046 [−0.067, −0.024], `REGRESSED` |
 
-Suites live in `tripwire.toml`; each points at a dataset and a target file.
+These describe one model on one dataset. A benchmark of the gate across many seeded
+changes is planned and is the number that will matter.
 
 ## Other backends
 
@@ -105,26 +191,25 @@ base_url    = "https://api.groq.com/openai/v1"
 api_key_env = "GROQ_API_KEY"   # the variable's name; the key itself is never stored
 ```
 
-## Example dataset
+## Datasets
 
-`datasets/banking77` holds three splits of [Banking77](https://github.com/PolyAI-LDN/task-specific-datasets)
-(customer-service intent classification, 77 intents, CC BY 4.0): `dev` for iterating on
-prompts, `gate` for the regression gate, and `reference` for measuring the gate itself.
-See the [dataset card](datasets/banking77/README.md).
-
-On a laptop RTX 3050 (6 GB) with `gemma3:4b`, a case takes about 0.36 s, so the 700-case
-gate split runs in roughly four minutes.
+- [`datasets/banking77`](datasets/banking77/README.md): three splits of Banking77
+  (customer-service intent classification, 77 intents, CC BY 4.0).
+- [`datasets/invoices`](datasets/invoices/README.md): 300 synthetic invoices for
+  structured extraction. Expected answers are built from the same parameters that render
+  each invoice, so no model or annotator produced them.
 
 ## Layout
 
 ```text
-src/tripwire/   models, datasets, providers, targets, runner, store, cli
+src/tripwire/   models, datasets, providers, targets, runner, scorers,
+                stats, compare, report, gate, store, cli
 datasets/       JSONL cases and dataset cards
 prompts/        system and user prompts, versioned in git
 targets/        one file per system under test
-scripts/        one-off dataset importers
-tests/          runs on a deterministic mock provider
-docs/           design notes
+scripts/        dataset importers and generators
+tests/          run on a deterministic mock provider
+docs/           methodology and design notes
 ```
 
 ## License
