@@ -1,0 +1,8 @@
+kind        = "prompt"
+provider    = "local"
+model       = "gemma3:4b"
+system      = "prompts/policy_qa/system_no_abstain.md"
+template    = "prompts/policy_qa/user.md"
+temperature = 0.7
+num_ctx     = 2048
+max_tokens  = 120

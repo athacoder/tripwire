@@ -1,0 +1,14 @@
+# One question per criterion. Each is judged in its own call.
+# Editing a criterion changes its version, so old verdicts are never reused.
+# How this wording was arrived at, and what it still gets wrong: docs/judge.md.
+
+[criteria]
+correct = "Treat the REFERENCE as true; do not check it against the documents. Does the answer state what the reference states? If the reference gives a fact, the answer passes only when it gives that same fact, with the same number, for the same member tier; an answer that says the documents do not cover the question fails, because the reference shows they do. If the reference says the documents do not cover the question, the answer passes only when it also says so; an answer that gives a value, or that claims the policy does not exist or does not apply, fails. Greetings, polite filler and extra statements do not matter for this criterion: ignore them."
+
+# Judged one sentence at a time, and every judged sentence must pass. Only sentences
+# containing a digit are judged: in this dataset every policy fact is a number, so a
+# sentence without one (a greeting, "the documents do not cover this") makes no claim.
+[criteria.grounded]
+per_sentence = true
+claim_pattern = "[0-9]"
+question = "The text in <answer> is one sentence taken from a longer answer. Does this sentence state only things that the DOCUMENTS contain? Say no if it states any number, condition or policy that is not in the documents."

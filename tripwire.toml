@@ -46,3 +46,26 @@ dataset        = "datasets/invoices/extract.jsonl"
 target         = "targets/invoice_extract.toml"
 scorers        = ["field_f1"]
 primary_metric = "field_f1.f1"
+
+# Grounded question answering, scored by an LLM judge. `fact` is a rule-based check of
+# the same thing, kept as an independent reference for the judge.
+[suite.policy-qa]
+dataset        = "datasets/policy_qa/qa.jsonl"
+target         = "targets/policy_qa.toml"
+scorers        = ["fact", "judge"]
+primary_metric = "judge.correct"
+
+# The judge grades one criterion per call. It is a different model family from the
+# systems under test, and runs at temperature 0.
+[judge]
+model    = "qwen2.5:7b"
+system   = "prompts/judge/system.md"
+template = "prompts/judge/user.md"
+rubric   = "prompts/judge/rubric.toml"
+
+# The same task with the "say so if the documents do not cover it" instruction removed.
+[suite.policy-qa-no-abstain]
+dataset        = "datasets/policy_qa/qa.jsonl"
+target         = "targets/policy_qa_no_abstain.toml"
+scorers        = ["fact", "judge"]
+primary_metric = "judge.correct"

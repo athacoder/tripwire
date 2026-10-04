@@ -1,0 +1,12 @@
+# The same two criteria in different words. Used to measure how much the judge's verdicts
+# depend on phrasing:
+#   tripwire judge probe policy-qa --probes datasets/policy_qa/probes.jsonl \
+#       --alt-rubric prompts/judge/rubric_reworded.toml
+
+[criteria]
+correct = "Assume the REFERENCE is right and do not verify it against the documents. Compare the answer with it. When the reference gives a fact, the answer is right only if it gives the same fact, the same figure and the same member tier; if the answer says the documents are silent, it is wrong, since the reference shows otherwise. When the reference says the documents are silent on the question, the answer is right only if it says that too; it is wrong if it supplies a figure or asserts that no such policy exists or applies. Pay no attention to greetings, pleasantries or additional remarks."
+
+[criteria.grounded]
+per_sentence = true
+claim_pattern = "[0-9]"
+question = "You are shown a single sentence from a longer answer, inside <answer>. Check it against the DOCUMENTS. Is everything the sentence asserts found in the documents? Reply no when it gives any figure, rule or condition that the documents lack."
