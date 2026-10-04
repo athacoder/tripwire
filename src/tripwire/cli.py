@@ -19,14 +19,17 @@ from . import __version__, datasets, report, stats, store
 from .compare import blocked, compare, matrix, summarise
 from .config import Config, load_config
 from .gate import gate as run_gate
+from .judge import Judge, against_rule, calibration, judge_suite, probe
 from .models import Case
 from .providers import ProviderError, Request, make_provider
-from .runner import Summary, run_suite
-from .scorers import score_suite, selfcheck
+from .runner import Summary, now, run_suite
+from .scorers import JUDGE, score_suite, selfcheck
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help=__doc__)
 dataset_app = typer.Typer(no_args_is_help=True, help="Inspect and prepare datasets.")
+judge_app = typer.Typer(no_args_is_help=True, help="Run an LLM judge and measure its accuracy.")
 app.add_typer(dataset_app, name="dataset")
+app.add_typer(judge_app, name="judge")
 
 ConfigOpt = Annotated[Path, typer.Option("--config", "-c", help="Path to tripwire.toml.")]
 DEFAULT_CONFIG = Path("tripwire.toml")
@@ -79,6 +82,12 @@ async def _ready(cfg: Config, name: str, db: sqlite3.Connection) -> tuple[Summar
     """Make sure a suite's samples and scores exist. Free when they already do."""
     s = await run_suite(cfg, name)
     score_suite(cfg, name, s.fingerprint, db)
+    if JUDGE in cfg.get_suite(name).scorers:
+        counts = await judge_suite(cfg, name, s.fingerprint, db)
+        if counts["judged"] or counts["failed"]:
+            typer.echo(
+                f"judge: {counts['judged']} new verdicts, {counts['failed']} failed", err=True
+            )
     return s, datasets.load(cfg.root / cfg.get_suite(name).dataset)
 
 
@@ -327,21 +336,27 @@ def bench(
 
 async def _doctor(cfg: Config) -> bool:
     healthy = True
+    # Each distinct model once: loading a model per suite would only thrash the GPU.
+    models: dict[tuple[str, str, int], list[str]] = {}
     for name in cfg.suite:
         target = cfg.target(name)
-        if target.kind != "prompt":
-            continue
+        if target.kind == "prompt":
+            models.setdefault((target.provider, target.model, target.num_ctx), []).append(name)
+    if cfg.judge:
+        key = (cfg.judge.provider, cfg.judge.model, cfg.judge.num_ctx)
+        models.setdefault(key, []).append("the judge")
+    for (provider_name, model, num_ctx), users in models.items():
         provider = None
         try:
-            provider = make_provider(cfg.provider[target.provider])
-            digest = await provider.digest(target.model)
-            ping = Request(target.model, "", "ping", num_ctx=target.num_ctx, max_tokens=1)
+            provider = make_provider(cfg.provider[provider_name])
+            digest = await provider.digest(model)
+            ping = Request(model, "", "ping", num_ctx=num_ctx, max_tokens=1)
             await asyncio.wait_for(provider.complete(ping), cfg.timeout)
-            info = await provider.info(target.model)
-            typer.echo(f"ok    {name}: {target.model} {digest[:12]} {info}")
-        except (ProviderError, TimeoutError) as e:
+            info = await provider.info(model)
+            typer.echo(f"ok    {model} {digest[:12]} {info}  used by: {', '.join(users)}")
+        except (ProviderError, TimeoutError, KeyError) as e:
             healthy = False
-            typer.secho(f"FAIL  {name}: {e or 'timed out'}", fg=typer.colors.RED)
+            typer.secho(f"FAIL  {model}: {e or 'timed out'}", fg=typer.colors.RED)
         finally:
             if provider:
                 await provider.aclose()
@@ -402,3 +417,175 @@ def split_cmd(
     for name, cases in datasets.split(datasets.load(src), sizes, seed).items():
         datasets.save(out / f"{name}.jsonl", cases)
         typer.echo(f"{name}: {len(cases)} cases, version {datasets.version(cases)}")
+
+
+@judge_app.command("run")
+def judge_run(
+    suite: str,
+    max_minutes: Annotated[float | None, typer.Option(help="Stop cleanly after this long.")] = None,
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Judge every stored sample that has no verdict yet. Slow, and resumable."""
+    cfg = load_config(config)
+    db = store.connect(cfg.db_path)
+
+    async def work() -> dict[str, int]:
+        s = await run_suite(cfg, suite)
+        score_suite(cfg, suite, s.fingerprint, db)
+        return await judge_suite(cfg, suite, s.fingerprint, db, max_minutes=max_minutes)
+
+    _show(_execute(work()))
+
+
+def _agreement_rows(result: dict[str, Any]) -> dict[str, Any]:
+    if result.get("n", 0) < 2:
+        return {"items": result.get("n", 0), "note": "too few items to measure agreement"}
+    rows = {
+        "items": result["n"],
+        "agreement": result["agreement"],
+        "kappa": f"{result['kappa']:.3f} [{result['kappa_lo']:.3f}, {result['kappa_hi']:.3f}]",
+        "passes a true pass": result["sensitivity"],
+        "fails a true fail": result["specificity"],
+    }
+    return {k: ("n/a" if v is None else v) for k, v in rows.items()}
+
+
+@judge_app.command("probe")
+def judge_probe(
+    suite: str,
+    probes: Annotated[Path, typer.Option(help="JSONL of constructed answers with known verdicts.")],
+    alt_rubric: Annotated[
+        Path | None, typer.Option(help="A reworded rubric, to measure sensitivity to phrasing.")
+    ] = None,
+    kind: Annotated[list[str] | None, typer.Option(help="Only these probe kinds.")] = None,
+    misses: Annotated[bool, typer.Option(help="Show each probe the judge got wrong.")] = False,
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Test the judge on answers built to be right or wrong in known ways."""
+    cfg = load_config(config)
+    with _errors():
+        items = [
+            json.loads(line) for line in probes.read_text(encoding="utf-8").splitlines() if line
+        ]
+    items = [item for item in items if not kind or item["kind"] in kind]
+    result = _execute(probe(cfg, suite, items))
+    for miss in result["misses"] if misses else []:
+        typer.echo(f"MISS {miss['criterion']}/{miss['kind']} (should be {miss['truth']}):")
+        typer.echo(f"  answer:    {miss['answer'][:200]}")
+        typer.echo(f"  evidence:  {str(miss.get('evidence', ''))[:200]}")
+        typer.echo(f"  reasoning: {str(miss.get('reasoning', ''))[:200]}")
+    ok = result["failed"] == 0
+    for criterion, found in result["criteria"].items():
+        typer.secho(f"criterion: {criterion}", bold=True)
+        _show({**_agreement_rows(found), **{f"  {k}": v for k, v in found["by_kind"].items()}})
+        ok = ok and min(found["by_kind"].values()) >= 0.8
+    typer.echo(f"calls without a usable verdict: {result['failed']}")
+    if alt_rubric:
+        reworded = _execute(probe(cfg, suite, items, str(alt_rubric.resolve())))
+        for criterion, verdicts in result["verdicts"].items():
+            other = reworded["verdicts"].get(criterion, [])
+            if len(other) == len(verdicts):
+                flips = sum(a != b for a, b in zip(verdicts, other, strict=True)) / len(verdicts)
+                typer.echo(f"{criterion}: {flips:.1%} of verdicts change under the reworded rubric")
+    typer.secho(
+        "the judge handles every probe kind" if ok else "the judge fails at least one probe kind",
+        fg="green" if ok else "red",
+    )
+    raise typer.Exit(0 if ok else 1)
+
+
+@judge_app.command("calibrate")
+def judge_calibrate(
+    suite: str,
+    rule: Annotated[
+        str | None, typer.Option(help="A rule-based metric to compare with, e.g. fact.pass.")
+    ] = None,
+    criterion: Annotated[
+        str, typer.Option(help="The judge criterion the rule matches.")
+    ] = "correct",
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Compare the judge's stored verdicts with human labels, and optionally with a rule."""
+    cfg = load_config(config)
+    db = store.connect(cfg.db_path)
+    s, _ = _execute(_ready(cfg, suite, db))
+    with _errors():
+        found = calibration(cfg, suite, s.fingerprint, db)
+    for name, result in found.items():
+        typer.secho(f"criterion: {name} (judge mean {result['judge_mean']})", bold=True)
+        rows = _agreement_rows(result)
+        if "human_estimate" in result:
+            lo, hi = result["human_lo"], result["human_hi"]
+            rows["human-equivalent score"] = f"{result['human_estimate']:.3f} [{lo:.3f}, {hi:.3f}]"
+        typer.echo("against human labels:")
+        _show(rows)
+    if rule:
+        with _errors():
+            versus = against_rule(db, cfg, suite, s.fingerprint, criterion, rule)
+        typer.secho(f"judge '{criterion}' against rule {rule}:", bold=True)
+        _show(_agreement_rows(versus))
+        typer.echo(f"disagreements: {len(versus.get('disagreements', []))}")
+
+
+@app.command()
+def label(
+    suite: str,
+    n: Annotated[int, typer.Option(help="How many answers to label.")] = 120,
+    labeller: Annotated[str, typer.Option(help="Your name, stored with each label.")] = "me",
+    seed: int = 0,
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Label stored answers by hand, blind: no model name and no judge verdict are shown."""
+    import random
+
+    cfg = load_config(config)
+    db = store.connect(cfg.db_path)
+    with _errors():
+        judge = Judge(cfg)
+    s = _execute(run_suite(cfg, suite))
+    cases = {c.hash: c for c in datasets.load(cfg.root / cfg.get_suite(suite).dataset)}
+    rows = db.execute(
+        "SELECT case_hash, rep, output FROM samples WHERE fingerprint=? AND status='ok' "
+        "AND rep<? ORDER BY case_hash, rep",
+        (s.fingerprint, cfg.get_suite(suite).reps),
+    ).fetchall()
+    rows = [r for r in rows if r["case_hash"] in cases]
+    random.Random(seed).shuffle(rows)  # a random subset, so corrected estimates stay valid
+    done = {
+        tuple(r)
+        for r in db.execute(
+            "SELECT case_hash, rep, criterion FROM human_labels WHERE fingerprint=? AND labeller=?",
+            (s.fingerprint, labeller),
+        )
+    }
+    for index, row in enumerate(rows[:n], 1):
+        case = cases[row["case_hash"]]
+        pending = [c for c in judge.criteria if (row["case_hash"], row["rep"], c) not in done]
+        if not pending:
+            continue
+        typer.secho(f"--- answer {index} of {min(n, len(rows))} ---", bold=True)
+        for key, value in case.input.items():
+            typer.echo(f"{key.upper()}:")
+            typer.echo(str(value))
+        reference = (
+            case.expected.get("reference") if isinstance(case.expected, dict) else case.expected
+        )
+        typer.echo(f"REFERENCE: {reference}")
+        typer.secho(f"ANSWER: {row['output'].strip()}", fg="cyan")
+        for criterion in pending:
+            typer.echo(f"{criterion}: {judge.criteria[criterion]}")
+            choice = typer.prompt("  [y]es / [n]o / [s]kip / [q]uit").strip().lower()[:1]
+            if choice == "q":
+                raise typer.Exit()
+            if choice in ("y", "n"):
+                entry = {
+                    "fingerprint": s.fingerprint,
+                    "case_hash": row["case_hash"],
+                    "rep": row["rep"],
+                    "criterion": criterion,
+                    "value": int(choice == "y"),
+                    "labeller": labeller,
+                    "created_at": now(),
+                }
+                store.insert(db, "human_labels", [entry], "OR REPLACE")
+    typer.echo("done. Run `tripwire judge calibrate` to compare the judge with your labels.")

@@ -42,6 +42,16 @@ def _samples(db: sqlite3.Connection, fingerprint: str, reps: int) -> dict[str, l
     return out
 
 
+def _brief(case: Case) -> tuple[str, Any]:
+    """What a reader needs from a case: its last input field (the question, when a long
+    context comes first) and the reference answer."""
+    shown = str(list(case.input.values())[-1]) if case.input else ""
+    expected = case.expected
+    if isinstance(expected, dict) and "reference" in expected:
+        expected = expected["reference"]
+    return shown[:160], expected
+
+
 def _slices(cases: list[Case]) -> dict[str, list[int]]:
     groups: dict[str, list[int]] = defaultdict(list)
     for i, case in enumerate(cases):
@@ -83,8 +93,8 @@ def summarise(
         ],
         "lowest": [
             {
-                "text": c.text[:160],
-                "expected": c.expected,
+                "text": _brief(c)[0],
+                "expected": _brief(c)[1],
                 "output": samples[c.hash][0]["output"].strip()[:160],
                 "score": float(v),
             }
@@ -210,8 +220,8 @@ def compare(
     def detail(i: int) -> dict[str, Any]:
         c = both[i]
         return {
-            "text": c.text[:160],
-            "expected": c.expected,
+            "text": _brief(c)[0],
+            "expected": _brief(c)[1],
             "base_output": base_samples[c.hash][0]["output"].strip()[:120],
             "head_output": head_samples[c.hash][0]["output"].strip()[:120],
             "delta": float(d[i]),

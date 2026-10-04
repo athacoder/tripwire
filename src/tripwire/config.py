@@ -47,6 +47,22 @@ class SuiteCfg(BaseModel):
     # Limits on the candidate: output_tokens_ratio_max, latency_p95_ratio_max,
     # truncation_rate_max, error_rate_max.
     guardrails: dict[str, float] = Field(default_factory=dict)
+    # Filled in when the config is loaded: judge criterion -> version of its prompt.
+    judge_versions: dict[str, str] = Field(default_factory=dict)
+
+
+class JudgeCfg(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = "local"
+    model: str = "llama3.1:8b"
+    system: str  # path to the judge's instructions
+    template: (
+        str  # path to the user template: case input fields, {reference}, {answer}, {criterion}
+    )
+    rubric: str  # path to a TOML file with a [criteria] table: name -> question
+    num_ctx: int = 2048
+    max_tokens: int = 300
 
 
 def _default_providers() -> dict[str, ProviderCfg]:
@@ -62,6 +78,7 @@ class Config(BaseModel):
     retries: int = 3
     backoff: float = 1.0  # base delay in seconds, doubled per attempt
     provider: dict[str, ProviderCfg] = Field(default_factory=_default_providers)
+    judge: JudgeCfg | None = None
     suite: dict[str, SuiteCfg] = Field(default_factory=dict)
 
     @property
@@ -82,4 +99,11 @@ class Config(BaseModel):
 def load_config(path: Path) -> Config:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     data["provider"] = {**_default_providers(), **data.get("provider", {})}
-    return Config(root=path.resolve().parent, **data)
+    cfg = Config(root=path.resolve().parent, **data)
+    if cfg.judge:
+        from .judge import Judge  # judge needs Config; import late to avoid a cycle
+
+        versions = Judge(cfg).versions
+        for suite in cfg.suite.values():
+            suite.judge_versions = versions
+    return cfg

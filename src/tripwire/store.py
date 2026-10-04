@@ -43,6 +43,14 @@ MIGRATIONS = [
         id INTEGER PRIMARY KEY, suite TEXT NOT NULL, base TEXT NOT NULL, head TEXT NOT NULL,
         verdict TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL);
     """,
+    # Blind human judgements of stored samples, for measuring how far to trust the judge.
+    """
+    CREATE TABLE human_labels(
+        fingerprint TEXT NOT NULL, case_hash TEXT NOT NULL, rep INTEGER NOT NULL,
+        criterion TEXT NOT NULL, value INTEGER NOT NULL, labeller TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(fingerprint, case_hash, rep, criterion, labeller));
+    """,
 ]
 
 

@@ -20,10 +20,11 @@ from typing import Any
 from . import __version__, datasets, store
 from .compare import blocked, compare
 from .config import Config, load_config
+from .judge import judge_suite
 from .models import Case
 from .providers import Provider
 from .runner import now, offline_target, run_suite
-from .scorers import score_suite
+from .scorers import JUDGE, score_suite
 
 SAMPLE_COLUMNS = (
     "case_hash, rep, status, output, model, seed, prompt_tokens, output_tokens, "
@@ -74,7 +75,14 @@ def export_bundle(
         "spec": json.loads(spec["spec"]),
         "tripwire": __version__,
     }
-    lines = [header, *(dict(r) for r in rows if r["case_hash"] in wanted)]
+    # Judge verdicts cost model time and CI cannot reproduce them, so they travel too.
+    # Rule-based scores are left out: CI recomputes those from the outputs.
+    verdicts = db.execute(
+        "SELECT case_hash, rep, scorer, version, metric, value, detail FROM scores "
+        "WHERE fingerprint=? AND scorer=? AND rep<? ORDER BY case_hash, rep, metric, version",
+        (fingerprint, JUDGE, reps),
+    )
+    lines = [header, *(dict(r) for r in (*rows, *verdicts) if r["case_hash"] in wanted)]
     path = _bundle_dir(cfg, version) / f"{static_key}.{fingerprint}.jsonl.gz"
     path.parent.mkdir(parents=True, exist_ok=True)
     body = "\n".join(json.dumps(line, sort_keys=True) for line in lines) + "\n"
@@ -91,7 +99,9 @@ def import_bundle(
     if not found:
         return None
     with gzip.open(found[-1], "rt", encoding="utf-8") as lines:
-        header, *samples = (json.loads(line) for line in lines)
+        header, *rows = (json.loads(line) for line in lines)
+    samples = [r for r in rows if "scorer" not in r]
+    verdicts = [r for r in rows if "scorer" in r]
     fp = header["fingerprint"]
     store.insert(
         db, "targets", [{"fingerprint": fp, "spec": json.dumps(header["spec"])}], "OR IGNORE"
@@ -99,6 +109,7 @@ def import_bundle(
     store.insert(
         db, "samples", [{"fingerprint": fp, "response": "{}", **s} for s in samples], "OR IGNORE"
     )
+    store.insert(db, "scores", [{"fingerprint": fp, **v} for v in verdicts], "OR IGNORE")
     return fp
 
 
@@ -149,9 +160,12 @@ async def gate(
                         return {"verdict": "INVALID", "reason": reason}, True
                 else:
                     fp = (await run_suite(side, name, provider=provider)).fingerprint
+                score_suite(side, name, fp, db)
+                if not verify_only:
+                    if JUDGE in suite.scorers:  # both sides are judged by the head's rubric
+                        await judge_suite(head_cfg, name, fp, db)
                     if bundle:
                         export_bundle(db, cfg, key, fp, cases, suite.reps)
-                score_suite(side, name, fp, db)
                 fingerprints.append(fp)
 
             result = compare(db, suite, cases, fingerprints[0], fingerprints[1])

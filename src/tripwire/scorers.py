@@ -111,6 +111,29 @@ def token_f1(output: str, expected: Any, ctx: dict[str, Any]) -> dict[str, float
     return {"f1": 2 * precision * recall / (precision + recall)}
 
 
+ABSTAINS = re.compile(
+    r"(not|n't|no) (cover|mention|specif|stat|includ|provid|contain|address|say|information"
+    r"|details?|list|outline|have)|unable to (find|determine)|cannot (find|determine)|no mention",
+    re.IGNORECASE,
+)
+
+
+def fact(output: str, expected: Any, ctx: dict[str, Any]) -> dict[str, float]:
+    """A rule-based check for question answering over documents.
+
+    Answerable cases pass when the expected number appears in the answer; unanswerable
+    cases pass when the answer says the documents do not cover it. Crude, but it needs
+    no model, which makes it an independent check on an LLM judge.
+    """
+    if not expected.get("answerable", True):
+        return {"pass": float(ABSTAINS.search(output.replace("’", "'")) is not None)}
+    numbers = re.findall(r"-?\d[\d,]*\.?\d*", output)
+    found = {float(n.replace(",", "").rstrip(".")) for n in numbers if n.strip(",.-")}
+    return {"pass": float(float(expected["value"]) in found)}
+
+
+JUDGE = "judge"  # scored by tripwire.judge, which needs a model and runs asynchronously
+
 SCORERS: dict[str, tuple[Scorer, str]] = {
     "exact": (exact, "1"),
     "contains": (contains, "1"),
@@ -119,6 +142,7 @@ SCORERS: dict[str, tuple[Scorer, str]] = {
     "json_valid": (json_valid, "1"),
     "field_f1": (field_f1, "1"),
     "token_f1": (token_f1, "1"),
+    "fact": (fact, "2"),
 }
 
 
@@ -135,6 +159,11 @@ def primary(suite: SuiteCfg) -> tuple[str, str, str]:
         raise ValueError(
             f"primary_metric {suite.primary_metric!r} is not among the suite's scorers"
         )
+    if name == JUDGE:
+        if metric not in suite.judge_versions:
+            known = ", ".join(suite.judge_versions) or "none; is there a [judge] section?"
+            raise ValueError(f"judge criterion {metric!r} is not in the rubric (known: {known})")
+        return name, suite.judge_versions[metric], metric
     return name, scorer(name)[1], metric
 
 
@@ -152,6 +181,8 @@ def score_suite(cfg: Config, name: str, fingerprint: str, db: sqlite3.Connection
     cases = {c.hash: c for c in datasets.load(cfg.root / suite.dataset)}
     ctx, rows = context(list(cases.values())), []
     for scorer_name in suite.scorers:
+        if scorer_name == JUDGE:
+            continue
         fn, version = scorer(scorer_name)
         todo = db.execute(
             "SELECT case_hash, rep, output, status FROM samples s WHERE fingerprint=? "
@@ -192,6 +223,8 @@ def selfcheck(cfg: Config, name: str) -> dict[str, Any]:
     suite = cfg.get_suite(name)
     cases = datasets.load(cfg.root / suite.dataset)
     scorer_name, _, metric = primary(suite)
+    if scorer_name == JUDGE:
+        raise ValueError("a judged metric is checked with `tripwire judge probe`, not selfcheck")
     fn, ctx = scorer(scorer_name)[0], context(cases)
 
     def mean(answer: Callable[[Case], str]) -> float:

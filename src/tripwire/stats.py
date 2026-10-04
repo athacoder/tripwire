@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 from scipy import stats as st
 
-Array = np.ndarray[Any, np.dtype[np.float64]]
+Array = Any  # anything numpy can turn into a float array
 
 
 def mean_ci(
@@ -217,3 +217,39 @@ def aa(
     }
     out["discordant"] = float((scores[:, 0] != scores[:, 1]).mean())
     return out
+
+
+def kappa(a: Array, b: Array) -> float:
+    """Cohen's kappa for two binary raters: agreement beyond what chance would give."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    observed = float((a == b).mean())
+    chance = float(a.mean() * b.mean() + (1 - a.mean()) * (1 - b.mean()))
+    return (observed - chance) / (1 - chance) if chance < 1 else 1.0
+
+
+def kappa_ci(
+    a: Array, b: Array, level: float = 0.90, n_boot: int = 2_000, seed: int = 0
+) -> tuple[float, float, float]:
+    """Kappa with a percentile bootstrap interval over the rated items."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    picks = np.random.default_rng(seed).integers(0, len(a), (n_boot, len(a)))
+    draws = [kappa(a[i], b[i]) for i in picks]
+    lo, hi = np.quantile(draws, [(1 - level) / 2, (1 + level) / 2])
+    return kappa(a, b), float(lo), float(hi)
+
+
+def ppi(
+    judge_all: Array, judge_labelled: Array, human_labelled: Array, level: float = 0.90
+) -> tuple[float, float, float]:
+    """Prediction-powered estimate of what humans would have scored on everything.
+
+    The judge's mean over all samples, corrected by the judge's average error on the
+    few samples a human also labelled. Valid for the human metric even when the judge
+    is biased, as long as the labelled samples are a random subset.
+    """
+    judge_all = np.asarray(judge_all, dtype=float)
+    gap = np.asarray(human_labelled, dtype=float) - np.asarray(judge_labelled, dtype=float)
+    estimate = float(judge_all.mean() + gap.mean())
+    spread = judge_all.var(ddof=1) / len(judge_all) + gap.var(ddof=1) / len(gap)
+    half = float(st.norm.ppf(0.5 + level / 2) * math.sqrt(spread))
+    return estimate, estimate - half, estimate + half

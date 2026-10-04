@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Any
@@ -177,7 +178,11 @@ class Mock(Provider):
         rate = float(r.model.partition(":")[2] or 0.8)
         chance = min(1.0, max(0.0, (rate - _unit(r.user)) / 0.2 + 0.5))
         passed = _unit(f"{r.model}|{r.user}|{r.seed}") < chance
-        return Response(text=str(r.expected) if passed else "wrong", model=r.model, latency_ms=0.0)
+        text = str(r.expected) if passed else "wrong"
+        if r.format:  # asked for a structured verdict: play the judge
+            verdict = "yes" if passed else "no"
+            text = json.dumps({"evidence": "mock", "reasoning": "mock", "verdict": verdict})
+        return Response(text=text, model=r.model, latency_ms=0.0)
 
     async def digest(self, model: str) -> str:
         return "mock"
