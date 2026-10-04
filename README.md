@@ -62,7 +62,7 @@ code 1. The method is described in [docs/methodology.md](docs/methodology.md).
 | Scorers, eval self-check, single-run report | done |
 | Paired comparison, verdicts, slices, guardrails, power analysis, A/A calibration | done |
 | Gate against a git ref, sample bundles, CI workflow with a pull-request comment | done |
-| LLM judge with calibration against human labels | planned |
+| LLM judge: versioned verdicts, probes with known answers, blind labelling, calibration | done |
 | Benchmark of the gate itself on seeded regressions | planned |
 | Dashboard | planned |
 
@@ -127,6 +127,10 @@ author's machine. That is fine for a solo project and worth knowing for a team.
 | `tripwire gate SUITE --base REF` | Compares the working tree (or `--head REF`) against a git ref |
 | `tripwire power SUITE` | Cases needed for a given drop, by formula and by simulation |
 | `tripwire aa SUITE` | Compares a suite with itself to measure the false-alarm rate |
+| `tripwire judge run SUITE` | Judges stored answers that have no verdict yet. Resumable |
+| `tripwire judge probe SUITE --probes FILE` | Tests the judge on answers built to be right or wrong in known ways |
+| `tripwire label SUITE` | Blind hand-labelling of stored answers |
+| `tripwire judge calibrate SUITE` | Judge against human labels and against a rule-based check |
 | `tripwire dataset lint FILE` | Duplicates, conflicting labels, empty fields, leakage into prompts |
 | `tripwire dataset split SRC OUT --size dev=200 ...` | Disjoint stratified splits |
 
@@ -174,6 +178,31 @@ RTX 3050 laptop GPU (6 GB), `gemma3:4b`, Banking77 gate split (700 cases).
 These describe one model on one dataset. A benchmark of the gate across many seeded
 changes is planned and is the number that will matter.
 
+## Judged metrics
+
+When no rule can score an answer, a local model judges it: one criterion per call,
+evidence quoted before the verdict, the answer treated as untrusted text. The judge is
+measured before it is believed ([docs/judge.md](docs/judge.md)):
+
+| Check (judge `qwen2.5:7b`, answers from `gemma3:4b`) | Result |
+|---|---|
+| Held-out probes: answers built to be right or wrong in ten known ways | `correct` κ 0.95, `grounded` κ 1.00 |
+| Agreement with an independent rule on 240 real answers | 99.2%, κ 0.95 |
+| Verdicts that change under a reworded rubric | 2.8% and 2.7% |
+| Known weakness | passes an answer that denies a policy exists when the documents are silent |
+
+Getting there took eight attempts at the rubric. What worked was judging one sentence at a
+time, switching judge model, and letting a rule decide which sentences make a claim at
+all, not more careful wording.
+
+A judged regression, caught with slices: dropping the "say so if the documents do not
+cover it" instruction took `judge.correct` from 0.904 to 0.775 (Δ −0.129, interval
+[−0.171, −0.092]). Answerable questions did not move; unanswerable ones fell by more than
+half.
+
+No human labels have been collected yet. `tripwire label` and `tripwire judge calibrate`
+are ready for them.
+
 ## Other backends
 
 Ollama on `localhost` is the default. Anything that speaks the OpenAI chat API also
@@ -195,6 +224,9 @@ api_key_env = "GROQ_API_KEY"   # the variable's name; the key itself is never st
 
 - [`datasets/banking77`](datasets/banking77/README.md): three splits of Banking77
   (customer-service intent classification, 77 intents, CC BY 4.0).
+- [`datasets/policy_qa`](datasets/policy_qa/README.md): 240 questions about templated
+  policy documents, a quarter of them deliberately unanswerable, plus probe answers for
+  testing a judge. Scored by an LLM judge and, independently, by a rule.
 - [`datasets/invoices`](datasets/invoices/README.md): 300 synthetic invoices for
   structured extraction. Expected answers are built from the same parameters that render
   each invoice, so no model or annotator produced them.
@@ -202,14 +234,14 @@ api_key_env = "GROQ_API_KEY"   # the variable's name; the key itself is never st
 ## Layout
 
 ```text
-src/tripwire/   models, datasets, providers, targets, runner, scorers,
+src/tripwire/   models, datasets, providers, targets, runner, scorers, judge,
                 stats, compare, report, gate, store, cli
 datasets/       JSONL cases and dataset cards
 prompts/        system and user prompts, versioned in git
 targets/        one file per system under test
 scripts/        dataset importers and generators
 tests/          run on a deterministic mock provider
-docs/           methodology and design notes
+docs/           methodology, the judge, and design notes
 ```
 
 ## License

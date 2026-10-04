@@ -81,11 +81,47 @@ A change that holds the overall score but breaks one slice, or doubles the outpu
 is blocked. Slice p-values are FDR-adjusted, and a ratio guardrail fails only when its
 whole interval is over the limit, so neither fires on noise alone.
 
+## The judge is a scorer with a prompt-derived version
+
+Judge verdicts are stored in the same `scores` table as rule-based scores, under scorer
+`judge`, metric = criterion. The version is a hash of the judge model's name and every
+word it reads (system prompt, template, criterion). Rewording one criterion re-judges
+that criterion only and keeps the old verdicts. The model digest is recorded with each
+verdict but is not part of the version, so CI can compute versions without a model.
+
+Verdicts travel in sample bundles: CI cannot run a judge, and re-judging on every machine
+would also make a comparison depend on who ran it.
+
+## Per-sentence criteria and the claim pattern
+
+A 7B judge asked whether a whole answer is grounded checks the first sentence and stops.
+Asked about one sentence at a time it is accurate, except that it calls greetings and
+"the documents do not cover this" ungrounded. Rather than keep rewording the question,
+the rubric can give a criterion a `claim_pattern`: sentences that do not match it are
+taken to make no claim and pass without a call. For the policy dataset the pattern is
+"contains a digit", because every policy fact there is a number. This is a deliberate
+domain rule, and it means a non-numeric invented claim would go unnoticed there.
+
+## Which model judges
+
+`qwen2.5:7b`, not `llama3.1:8b` as first planned. On the tuning probes llama misread the
+documents (calling a number absent when it was present) under every wording tried; qwen
+did not. The judge must still differ from the system under test, so `qwen2.5:7b` is no
+longer available as a comparison system for judged suites.
+
+## Labelling is a random sample, not a stratified one
+
+`tripwire label` draws answers uniformly at random. Sampling by judge verdict would give
+more failures to label, but the prediction-powered estimate is only valid when the
+labelled answers are a random subset of all answers.
+
 ## Not built yet
 
 
 - A dollar-cost column and price table: every backend in use is local and free.
 - A rate limiter for hosted APIs: retries with backoff cover the free tiers so far.
+- A pairwise judge (which of two answers is better). The three suites all have a
+  reference answer, so nothing needs it yet.
 - Two-stage gating (a cheap first look, escalating only when undecided).
 - A composite GitHub Action; the workflow file is the integration for now.
 - `import_bundle` picks one bundle per static key. Two digests of the same tag would need
