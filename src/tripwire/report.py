@@ -66,6 +66,13 @@ def comparison(
         f"margin {r['margin']:.3f} · α {r['alpha']} · paired on {r['paired']} of {r['cases']} cases"
         + mcnemar
     )
+    if r.get("stages", 1) > 1:
+        note = (
+            "decided on the first-stage subset; the remaining cases were not run"
+            if r["stage"] == 1
+            else "the first-stage subset could not decide, so every case was run"
+        )
+        parts.append(f"Stage {r['stage']} of {r['stages']}: {note}. Each stage uses half of α.")
 
     if r["slices"]:
         rows = [

@@ -7,8 +7,11 @@ import io
 import json
 import sqlite3
 import sys
+import time
 from collections.abc import Coroutine, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -228,6 +231,9 @@ def power(
     discordant: Annotated[
         float | None, typer.Option(help="Share of cases where two runs disagree.")
     ] = None,
+    first_stage: Annotated[
+        int | None, typer.Option(help="Also simulate a two-stage gate with this first stage.")
+    ] = None,
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """How many cases the gate needs, from this suite's real scores."""
@@ -266,6 +272,9 @@ def power(
             f"  n={n:<5} REGRESSED {hit['REGRESSED']:.2f} INCONCLUSIVE {hit['INCONCLUSIVE']:.2f}"
             f" | PASS {null['PASS'] + null['IMPROVED']:.2f} false REGRESSED {null['REGRESSED']:.3f}"
         )
+    if first_stage:
+        with _errors():
+            _two_stage_report(outcomes, drop, discordant, conf.alpha, conf.margin, first_stage)
 
 
 @app.command("aa")
@@ -751,3 +760,139 @@ def review_cmd(
         datasets.save(into, dataset)
     left = sum(c.provenance.get("status") == "pending" for c in queue)
     typer.echo(f"{added} cases added to {into}; {left} candidates still pending")
+
+
+def _two_stage_report(
+    outcomes: Any, drop: float, discordant: float, alpha: float, margin: float, first: int
+) -> None:
+    total = len(outcomes)
+    typer.echo(f"\nTwo-stage gate: {first} cases first, all {total} only if undecided")
+    for label, effect in ((f"true drop {drop}", drop), ("no drop at all", 0.0)):
+        one = stats.simulate(outcomes, effect, total, discordant, alpha, margin)
+        two = stats.simulate(outcomes, effect, total, discordant, alpha, margin, first=first)
+        saved = 1 - two["cases"] / total
+        typer.echo(
+            f"  {label}: decided at stage one {two['early']:.0%} of the time, "
+            f"{two['cases']:.0f} cases on average ({saved:.0%} fewer)"
+        )
+        typer.echo(
+            f"    REGRESSED {two['REGRESSED']:.3f} (single stage {one['REGRESSED']:.3f}) · "
+            f"INCONCLUSIVE {two['INCONCLUSIVE']:.3f} (single stage {one['INCONCLUSIVE']:.3f})"
+        )
+
+
+@app.command()
+def queue(
+    suites: Annotated[
+        list[str] | None, typer.Argument(help="Suites to run (default: all).")
+    ] = None,
+    match: Annotated[
+        str | None, typer.Option(help="Only suites whose name fits this glob.")
+    ] = None,
+    max_minutes: Annotated[float | None, typer.Option(help="Total time budget.")] = None,
+    judge: Annotated[bool, typer.Option(help="Also judge suites with a judged metric.")] = True,
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Run several suites back to back, one model at a time, within one time budget."""
+    cfg = load_config(config)
+    names = [n for n in (suites or list(cfg.suite)) if not match or fnmatch(n, match)]
+    with _errors():
+        if not names:
+            raise ValueError("no suites to run")
+        targets = {n: cfg.target(n) for n in names}
+    # Group by model: switching models means unloading one and loading another.
+    names.sort(key=lambda n: (targets[n].provider, targets[n].model, targets[n].num_ctx))
+    db = store.connect(cfg.db_path)
+    started = time.monotonic()
+
+    def left() -> float | None:
+        if max_minutes is None:
+            return None
+        return max(0.0, max_minutes - (time.monotonic() - started) / 60)
+
+    async def work() -> list[Summary]:
+        plan = [await run_suite(cfg, n, dry_run=True) for n in names]
+        for s in plan:
+            speed = db.execute(
+                "SELECT avg(latency_ms) FROM samples WHERE model=?", (targets[s.suite].model,)
+            ).fetchone()[0]
+            eta = f"about {s.pending * speed / 60_000:.0f} min" if speed else "time unknown"
+            typer.echo(
+                f"{s.suite:<32} {targets[s.suite].model:<14} {s.pending:>6} to generate, {eta}"
+            )
+        done = []
+        for name in names:
+
+            def show(s: Summary) -> None:
+                made = s.total - s.cached - s.pending
+                if made and made % 100 == 0:
+                    typer.echo(f"  {s.suite}: {made} of {s.total - s.cached}")
+
+            s = await run_suite(cfg, name, max_minutes=left(), progress=show)
+            score_suite(cfg, name, s.fingerprint, db)
+            typer.echo(
+                f"{name}: {sum(s.statuses.values())} generated, {s.cached} cached, "
+                f"{s.errors} errors, {s.pending} pending"
+            )
+            done.append(s)
+        for s in done if judge else []:
+            if JUDGE in cfg.get_suite(s.suite).scorers:
+                counts = await judge_suite(cfg, s.suite, s.fingerprint, db, max_minutes=left())
+                typer.echo(f"{s.suite}: judge {counts}")
+                s.pending += counts["pending"]
+        return done
+
+    results = _execute(work())
+    minutes = (time.monotonic() - started) / 60
+    unfinished = sum(s.pending for s in results)
+    errors = sum(s.errors for s in results)
+    typer.echo(f"finished in {minutes:.1f} min; {unfinished} still pending, {errors} errors")
+    raise typer.Exit(1 if unfinished or errors else 0)
+
+
+@app.command()
+def usage(
+    days: Annotated[int, typer.Option(help="How far back to look.")] = 14,
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Model calls, tokens and model time by day, plus what the cache saved."""
+    cfg = load_config(config)
+    db = store.connect(cfg.db_path)
+    since = (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
+    rows = db.execute(
+        "SELECT substr(created_at, 1, 10) AS day, model, count(*) AS calls, "
+        "sum(prompt_tokens) AS prompt, sum(output_tokens) AS output, "
+        "sum(latency_ms) / 3600000.0 AS hours FROM samples WHERE created_at >= ? "
+        "GROUP BY 1, 2 ORDER BY 1, 2",
+        (since,),
+    ).fetchall()
+    typer.echo(
+        f"{'day':<12}{'model':<16}{'calls':>8}{'prompt tok':>13}{'output tok':>12}{'hours':>8}"
+    )
+    for r in rows:
+        typer.echo(
+            f"{r['day']:<12}{r['model']:<16}{r['calls']:>8}{r['prompt']:>13}{r['output']:>12}"
+            f"{r['hours']:>8.2f}"
+        )
+    typer.echo(
+        f"{'total':<28}{sum(r['calls'] for r in rows):>8}{sum(r['prompt'] for r in rows):>13}"
+        f"{sum(r['output'] for r in rows):>12}{sum(r['hours'] for r in rows):>8.2f}"
+    )
+    verdicts = [
+        json.loads(r["detail"] or "{}")
+        for r in db.execute("SELECT detail FROM scores WHERE scorer='judge'")
+    ]
+    judged_hours = sum(v.get("ms") or 0 for v in verdicts) / 3_600_000
+    typer.echo(f"judge: {len(verdicts)} verdicts stored, {judged_hours:.2f} hours of model time")
+    counts = [
+        json.loads(r["env"]).get("samples", {})
+        for r in db.execute("SELECT env FROM runs WHERE started_at >= ?", (since,))
+    ]
+    cached = sum(c.get("cached", 0) for c in counts)
+    generated = sum(c.get("generated", 0) for c in counts)
+    if cached + generated:
+        share = cached / (cached + generated)
+        typer.echo(
+            f"cache: {cached} of {cached + generated} requested samples were already stored "
+            f"({share:.0%} of calls avoided)"
+        )

@@ -163,12 +163,16 @@ def simulate(
     margin: float = 0.03,
     sims: int = 1_000,
     seed: int = 0,
+    first: int | None = None,
 ) -> dict[str, float]:
     """How often each verdict comes up when the true drop is `effect`.
 
     Resamples real pass/fail outcomes, then flips them: symmetric noise at the given
     discordant rate, plus extra pass-to-fail flips worth `effect`. Uses the normal
     approximation so thousands of simulated gates run in seconds.
+
+    With `first`, simulates the two-stage gate instead, and also reports how many cases
+    it ran on average ("cases") and how often the first stage decided ("early").
     """
     base = np.asarray(base, dtype=float)
     rate = float(base.mean())
@@ -178,13 +182,23 @@ def simulate(
     down = min(1.0, (discordant / 2 + effect) / rate)  # P(pass -> fail)
     up = min(1.0, (discordant / 2) / (1 - rate))  # P(fail -> pass)
     counts: Counter[str] = Counter()
+    used = early = 0
     for _ in range(sims):
         b = rng.choice(base, n)
         u = rng.random(n)
         h = np.where(b == 1, u >= down, u < up).astype(float)
-        r = paired(b, h, alpha, fast=True)
-        counts[verdict(r.lo, r.hi, margin)] += 1
-    return {name: counts[name] / sims for name in ("IMPROVED", "PASS", "INCONCLUSIVE", "REGRESSED")}
+        if first is None:
+            r = paired(b, h, alpha, fast=True)
+            decision, ran = verdict(r.lo, r.hi, margin), n
+        else:
+            decision, ran = two_stage(b, h, first, alpha, margin)
+            early += ran < n or first >= n
+        counts[decision] += 1
+        used += ran
+    out = {name: counts[name] / sims for name in ("IMPROVED", "PASS", "INCONCLUSIVE", "REGRESSED")}
+    if first is not None:
+        out["cases"], out["early"] = used / sims, early / sims
+    return out
 
 
 def aa(
@@ -253,3 +267,24 @@ def ppi(
     spread = judge_all.var(ddof=1) / len(judge_all) + gap.var(ddof=1) / len(gap)
     half = float(st.norm.ppf(0.5 + level / 2) * math.sqrt(spread))
     return estimate, estimate - half, estimate + half
+
+
+def two_stage(
+    base: Array,
+    head: Array,
+    first: int,
+    alpha: float = 0.05,
+    margin: float = 0.03,
+    fast: bool = True,
+) -> tuple[str, int]:
+    """Verdict of a gate that looks at the first `first` cases, then at all of them.
+
+    Each look uses alpha / 2. Returns the verdict and how many cases it had to run.
+    """
+    base, head = np.asarray(base, dtype=float), np.asarray(head, dtype=float)
+    early = paired(base[:first], head[:first], alpha / 2, fast=fast)
+    decision = verdict(early.lo, early.hi, margin)
+    if decision != "INCONCLUSIVE" or first >= len(base):
+        return decision, min(first, len(base))
+    full = paired(base, head, alpha / 2, fast=fast)
+    return verdict(full.lo, full.hi, margin), len(base)

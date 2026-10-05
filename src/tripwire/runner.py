@@ -10,6 +10,7 @@ import random
 import subprocess
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,12 +84,17 @@ async def run_suite(
     name: str,
     *,
     limit: int | None = None,
+    only: set[str] | None = None,
     max_minutes: float | None = None,
     dry_run: bool = False,
     provider: Provider | None = None,
+    progress: Callable[[Summary], None] | None = None,
 ) -> Summary:
+    """`limit` keeps the first N cases, `only` the cases with the given hashes."""
     suite = cfg.get_suite(name)
-    cases = datasets.load(cfg.root / suite.dataset)[:limit]
+    every_case = datasets.load(cfg.root / suite.dataset)
+    version = datasets.version(every_case)  # the dataset's identity, whatever subset runs
+    cases = [c for c in every_case[:limit] if only is None or c.hash in only]
     target = await resolve(cfg, name, provider)
     # Expected answers written by a model reward imitating that model. Scoring the same
     # model against them would flatter it, so that is refused outright.
@@ -111,7 +117,7 @@ async def run_suite(
         }
         todo = [(c, rep) for c in cases for rep in range(suite.reps) if (c.hash, rep) not in have]
         total = len(cases) * suite.reps
-        s = Summary(name, fp, datasets.version(cases), total, total - len(todo), len(todo))
+        s = Summary(name, fp, version, total, total - len(todo), len(todo))
         if dry_run:
             mean = db.execute(
                 "SELECT avg(latency_ms) FROM samples WHERE fingerprint=?", (fp,)
@@ -208,6 +214,8 @@ async def run_suite(
                         store.insert(db, "errors", [error])
                         s.errors += 1
                         s.pending -= 1
+                        if progress:
+                            progress(s)
                         return
                 wall_ms = (time.perf_counter() - start) * 1000  # final attempt only
                 if target.cfg.kind == "prompt" and not resp.model.startswith(model):
@@ -235,6 +243,8 @@ async def run_suite(
                 s.output_tokens += resp.output_tokens
                 s.model_seconds += latency / 1000
                 s.pending -= 1
+                if progress:
+                    progress(s)
 
         status = "aborted"
         tasks = [asyncio.ensure_future(one(c, rep)) for c, rep in todo]
@@ -243,6 +253,8 @@ async def run_suite(
             if await target.provider.digest(model) != target.spec["digest"]:
                 raise ProviderError("model digest changed during the run", kind="model_mismatch")
             env.update(await target.provider.info(model))
+            made = sum(s.statuses.values())
+            env["samples"] = {"cached": s.cached, "generated": made, "errors": s.errors}
             status = "partial" if s.pending or s.errors else "complete"
         finally:
             # On a fatal error, stop the siblings before the database handle goes away.

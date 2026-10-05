@@ -133,8 +133,14 @@ def compare(
     base_fp: str,
     head_fp: str,
     seed: int = 0,
+    alpha: float | None = None,
 ) -> dict[str, Any]:
-    """Paired comparison of two fingerprints on the same cases."""
+    """Paired comparison of two fingerprints on the same cases.
+
+    `alpha` overrides the suite's error rate: a gate that may look twice spends half of
+    it on each look.
+    """
+    alpha = suite.alpha if alpha is None else alpha
     base_scores, head_scores = (case_scores(db, suite, fp) for fp in (base_fp, head_fp))
     base_samples, head_samples = (_samples(db, fp, suite.reps) for fp in (base_fp, head_fp))
     both = [c for c in cases if c.hash in base_scores and c.hash in head_scores]
@@ -145,7 +151,7 @@ def compare(
         "metric": suite.primary_metric,
         "base_fingerprint": base_fp,
         "head_fingerprint": head_fp,
-        "alpha": suite.alpha,
+        "alpha": alpha,
         "margin": suite.margin,
         "cases": len(cases),
         "paired": len(both),
@@ -163,7 +169,7 @@ def compare(
 
     base = np.array([np.mean(base_scores[c.hash]) for c in both])
     head = np.array([np.mean(head_scores[c.hash]) for c in both])
-    r = stats.paired(base, head, suite.alpha, seed=seed)
+    r = stats.paired(base, head, alpha, seed=seed)
     result.update(
         verdict=stats.verdict(r.lo, r.hi, suite.margin),
         base=r.base,
@@ -179,11 +185,11 @@ def compare(
     found: list[dict[str, Any]] = []
     for tag, idx in sorted(_slices(both).items()):
         if len(idx) >= MIN_SLICE:
-            s = stats.paired(base[idx], head[idx], suite.alpha, n_boot=2_000, seed=seed)
+            s = stats.paired(base[idx], head[idx], alpha, n_boot=2_000, seed=seed)
             found.append({"tag": tag, "n": s.n, "delta": s.delta, "lo": s.lo, "hi": s.hi, "p": s.p})
     for item, adjusted in zip(found, stats.adjust([s["p"] for s in found]), strict=True):
         item["p_adjusted"] = adjusted
-        item["regressed"] = adjusted < suite.alpha and item["delta"] < 0
+        item["regressed"] = adjusted < alpha and item["delta"] < 0
     result["slices"] = sorted(found, key=lambda s: s["delta"])
     result["small_slices"] = sum(len(i) < MIN_SLICE for i in _slices(both).values())
 
@@ -206,7 +212,7 @@ def compare(
             per_case(base_samples, column),
             per_case(head_samples, column),
             stat,
-            level=1 - 2 * suite.alpha / len(active),
+            level=1 - 2 * alpha / len(active),
             seed=seed,
         )
         # Fail only when the whole interval is over the limit; a noisy overshoot is a warning.
@@ -264,7 +270,7 @@ def blocked(result: dict[str, Any], suite: SuiteCfg) -> bool:
     verdict = result["verdict"]
     return (
         verdict in ("REGRESSED", "INVALID")
-        or (verdict == "INCONCLUSIVE" and suite.on_inconclusive == "fail")
+        or (verdict == "INCONCLUSIVE" and suite.on_inconclusive != "warn")
         or any(not g["ok"] for g in result.get("guardrails", []))
         or any(s["regressed"] for s in result.get("slices", []))
     )

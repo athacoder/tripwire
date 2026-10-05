@@ -43,7 +43,10 @@ class SuiteCfg(BaseModel):
     primary_metric: str = "exact.pass"  # "<scorer>.<metric>"; this one decides the verdict
     alpha: float = 0.05  # one-sided error rate of each interval bound
     margin: float = 0.03  # largest drop in the primary metric that is still acceptable
-    on_inconclusive: Literal["fail", "warn"] = "fail"
+    # What an undecided gate does: block, let it through with a warning, or "escalate":
+    # look at `first_stage` cases first and run the rest only if those cannot decide.
+    on_inconclusive: Literal["fail", "warn", "escalate"] = "fail"
+    first_stage: int = 250
     # Limits on the candidate: output_tokens_ratio_max, latency_p95_ratio_max,
     # truncation_rate_max, error_rate_max.
     guardrails: dict[str, float] = Field(default_factory=dict)

@@ -144,11 +144,20 @@ async def gate(
         if keys[0] == keys[1]:
             return {"verdict": "UNCHANGED"}, False  # nothing that affects output changed
 
+        # A gate that may escalate looks first at a fixed, stratified subset, and at the
+        # whole set only if that cannot decide. Each look gets half the error budget, so
+        # looking twice cannot inflate the false-alarm rate (a union bound).
+        staged = suite.on_inconclusive == "escalate" and suite.first_stage < len(cases)
+        first = (
+            datasets.split(cases, {"first": suite.first_stage}, seed=0)["first"] if staged else []
+        )
+        stages = [(first, suite.alpha / 2), (cases, suite.alpha / 2)] if staged else [(cases, None)]
+
         db = store.connect(cfg.db_path)
         try:
-            fingerprints = []
-            for side, key in zip(sides, keys, strict=True):
-                if verify_only:
+            fingerprints: list[str] = []
+            if verify_only:
+                for side, key in zip(sides, keys, strict=True):
                     fp = import_bundle(db, cfg, key, version)
                     if fp is None:
                         which = "base" if side is base_cfg else "head"
@@ -158,17 +167,27 @@ async def gate(
                             f"on a machine with the model and commit the {cfg.bundles}/ directory."
                         )
                         return {"verdict": "INVALID", "reason": reason}, True
-                else:
-                    fp = (await run_suite(side, name, provider=provider)).fingerprint
-                score_suite(side, name, fp, db)
-                if not verify_only:
-                    if JUDGE in suite.scorers:  # both sides are judged by the head's rubric
-                        await judge_suite(head_cfg, name, fp, db)
-                    if bundle:
-                        export_bundle(db, cfg, key, fp, cases, suite.reps)
-                fingerprints.append(fp)
+                    score_suite(side, name, fp, db)
+                    fingerprints.append(fp)
 
-            result = compare(db, suite, cases, fingerprints[0], fingerprints[1])
+            for number, (subset, alpha) in enumerate(stages, 1):
+                if not verify_only:
+                    fingerprints = []
+                    wanted = {c.hash for c in subset}
+                    for side, key in zip(sides, keys, strict=True):
+                        run = await run_suite(side, name, only=wanted, provider=provider)
+                        fp = run.fingerprint
+                        score_suite(side, name, fp, db)
+                        if JUDGE in suite.scorers:  # both sides are judged by the head's rubric
+                            await judge_suite(head_cfg, name, fp, db)
+                        if bundle:
+                            export_bundle(db, cfg, key, fp, cases, suite.reps)
+                        fingerprints.append(fp)
+                result = compare(db, suite, subset, fingerprints[0], fingerprints[1], alpha=alpha)
+                result["stage"], result["stages"] = number, len(stages)
+                if result["verdict"] != "INCONCLUSIVE":
+                    break  # decided (or invalid): the remaining cases are never run
+
             is_blocked = blocked(result, suite)
             store.insert(
                 db,
