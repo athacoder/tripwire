@@ -18,6 +18,9 @@ scorers        = ["exact"]
 primary_metric = "exact.pass"
 alpha          = 0.05
 margin         = 0.03
+# Look at 250 cases first; run all 700 only if those cannot decide.
+on_inconclusive = "escalate"
+first_stage     = 250
 
 [suite.banking-intent.guardrails]
 output_tokens_ratio_max = 1.25
@@ -74,4 +77,9 @@ primary_metric = "judge.correct"
 # case, an irrelevant extra sentence). `tripwire report` shows a slice per perturbation.
 [suite.banking-intent-robust]
 dataset = "datasets/banking77/robust.jsonl"
+target  = "targets/banking_intent.toml"
+
+# The large split: ground truth for measuring the gate itself.
+[suite.banking-intent-reference]
+dataset = "datasets/banking77/reference.jsonl"
 target  = "targets/banking_intent.toml"
