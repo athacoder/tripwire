@@ -5,12 +5,12 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from tripwire import store
+from tripwire import datasets, store
 from tripwire.cli import app
-from tripwire.config import TargetCfg
+from tripwire.config import TargetCfg, load_config
 from tripwire.models import Case
 from tripwire.providers import HttpProvider, Mock, Provider, ProviderError, Response
-from tripwire.runner import run_suite
+from tripwire.runner import offline_target, run_suite
 from tripwire.targets import Target, seed_for
 
 TOTAL = 80  # 40 cases x 2 repetitions in the `project` fixture
@@ -237,3 +237,57 @@ def test_a_template_that_does_not_match_the_cases_is_explained(project):
 def test_an_unknown_suite_lists_the_known_ones(project):
     with pytest.raises(ValueError, match="known: demo"):
         asyncio.run(run_suite(project, "nope"))
+
+
+def test_a_case_listed_twice_is_generated_once(project):
+    cases = datasets.load(project.root / "data.jsonl")
+    datasets.save(project.root / "data.jsonl", [*cases[:5], cases[0]])
+    provider = Scripted()
+    summary = run(project, provider)
+    assert provider.calls == 10 and summary.total == 10 and summary.errors == 0
+
+
+def test_the_server_identifies_a_backend_only_when_no_digest_can(project):
+    """Two OpenAI-compatible servers offering one model name must not share samples, and a
+    move from one to the other is a change the gate has to see. Ollama models carry a
+    digest, so there the address stays out: another machine, same target."""
+    text = (project.root / "tripwire.toml").read_text()
+    for name, kind, url in (
+        ("a", "openai_compat", "http://localhost:1234/v1"),
+        ("b", "openai_compat", "https://api.example.com/v1"),
+        ("c", "ollama", "http://localhost:11434"),
+        ("d", "ollama", "http://another-machine:11434"),
+    ):
+        text += f'[provider.{name}]\nkind = "{kind}"\nbase_url = "{url}"\n'
+        text += f'[suite.{name}]\ndataset = "data.jsonl"\ntarget = "{name}.toml"\n'
+        (project.root / f"{name}.toml").write_text(f'provider = "{name}"\nmodel = "llama3"\n')
+    (project.root / "tripwire.toml").write_text(text)
+    cfg = load_config(project.root / "tripwire.toml")
+    key = {name: offline_target(cfg, name).static_key for name in "abcd"}
+    assert key["a"] != key["b"] and key["c"] == key["d"] and key["a"] != key["c"]
+
+
+def test_a_misspelt_setting_is_rejected_not_ignored(project):
+    path = project.root / "tripwire.toml"
+    text = path.read_text()
+    for bad, message in (
+        ("concurency = 4\n" + text, "concurency"),
+        (text + "[suite.demo.guardrails]\nlatency_p95_ratio = 1.5\n", "unknown guardrail"),
+        (text + "alpha = 0.7\n", "alpha"),
+    ):
+        path.write_text(bad)
+        with pytest.raises(ValueError, match=message):
+            load_config(path)
+    path.write_text(text + "[suite.demo.guardrails]\nlatency_p95_ratio_max = 1.5\n")
+    assert load_config(path).suite["demo"].guardrails == {"latency_p95_ratio_max": 1.5}
+
+
+def test_a_missing_or_broken_config_is_one_line_not_a_traceback(project):
+    cli = CliRunner()
+    missing = cli.invoke(app, ["run", "demo", "--config", str(project.root / "nope.toml")])
+    assert missing.exit_code == 2 and "error:" in missing.output
+    (project.root / "tripwire.toml").write_text("not = [valid")
+    broken = cli.invoke(app, ["run", "demo", "--config", str(project.root / "tripwire.toml")])
+    assert broken.exit_code == 2 and "error:" in broken.output
+    lint = ["dataset", "lint", str(project.root / "data.jsonl"), "--prompts"]
+    assert cli.invoke(app, [*lint, str(project.root / "no_such_folder")]).exit_code == 2

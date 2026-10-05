@@ -43,6 +43,18 @@ class ProviderError(Exception):
         self.retryable, self.kind = retryable, kind
 
 
+def context_needed(r: Request) -> int:
+    """Tokens a request may occupy, prompt plus answer. Deliberately an overestimate:
+    Ollama cuts a prompt that does not fit and answers anyway, so this is checked up front.
+
+    English prose runs at 3.5 to 4 characters per token, but text full of numbers is
+    denser: this project's invoices measured 2.55. The estimate assumes 2.5. Scripts
+    without spaces between words can be denser still, and would need a larger window
+    than this suggests.
+    """
+    return (len(r.system) + len(r.user)) * 2 // 5 + r.max_tokens
+
+
 def _messages(r: Request) -> list[dict[str, str]]:
     system = [{"role": "system", "content": r.system}] if r.system else []
     return [*system, {"role": "user", "content": r.user}]

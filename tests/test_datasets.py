@@ -30,8 +30,12 @@ def test_version_is_order_independent_and_changes_with_any_case():
 
 def test_save_and_load_round_trip(tmp_path):
     cases = make_cases(5)
+    # Unicode line separators inside a text are not line ends of the file.
+    cases.append(Case(input={"text": "first second\u0085third"}, expected="x"))
     datasets.save(tmp_path / "d.jsonl", cases)
-    assert [c.hash for c in datasets.load(tmp_path / "d.jsonl")] == [c.hash for c in cases]
+    loaded = datasets.load(tmp_path / "d.jsonl")
+    assert [c.hash for c in loaded] == [c.hash for c in cases]
+    assert loaded[-1].input == cases[-1].input
 
 
 def test_lint_passes_a_clean_dataset():

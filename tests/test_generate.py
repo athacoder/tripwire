@@ -66,6 +66,9 @@ def test_shuffle_lines_changes_only_the_order_of_a_chosen_field():
     before, after = context.split("\n"), shuffled.input["context"].split("\n")
     assert after[:2] == before[:2] and sorted(after) == sorted(before) and after != before
     assert shuffled.input["question"] == case.input["question"]
+    # Lines that are all the same have no other order: the text comes back as it was.
+    same = Case(input={"context": "Policies\nRefunds: 30 days.\nRefunds: 30 days."}, expected="x")
+    assert len(generate.perturb([same], ["shuffle_lines"])) == 1
 
 
 class Scripted(Mock):

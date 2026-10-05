@@ -55,12 +55,22 @@ def _git_sha(root: Path) -> str | None:
 
 
 def _provider_kind(cfg: Config, name: str) -> str:
+    """What identifies a suite's backend in its fingerprint.
+
+    An Ollama model carries a digest, so the server's address is left out on purpose: the
+    same model on another machine is the same target. An OpenAI-compatible API reports no
+    digest, so there the address is the only thing telling two servers apart, and it has
+    to be part of the identity or they would share samples.
+    """
     tcfg = cfg.target(name)
     if tcfg.kind != "prompt":
         return ""
     if tcfg.provider not in cfg.provider:
         raise ValueError(f"target uses unknown provider {tcfg.provider!r}")
-    return cfg.provider[tcfg.provider].kind
+    provider = cfg.provider[tcfg.provider]
+    if provider.kind == "openai_compat":
+        return f"{provider.kind} {provider.base_url}"
+    return provider.kind
 
 
 def offline_target(cfg: Config, name: str) -> Target:
@@ -95,6 +105,8 @@ async def run_suite(
     every_case = datasets.load(cfg.root / suite.dataset)
     version = datasets.version(every_case)  # the dataset's identity, whatever subset runs
     cases = [c for c in every_case[:limit] if only is None or c.hash in only]
+    # A sample is keyed by its case, so a case listed twice is still one sample to make.
+    cases = list({c.hash: c for c in cases}.values())
     target = await resolve(cfg, name, provider)
     # Expected answers written by a model reward imitating that model. Scoring the same
     # model against them would flatter it, so that is refused outright.

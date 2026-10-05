@@ -81,6 +81,12 @@ def _execute[T](work: Coroutine[Any, Any, T]) -> T:
         return asyncio.run(work)
 
 
+def _load(path: Path) -> Config:
+    """The configuration; a missing or invalid file is reported, not thrown at the user."""
+    with _errors():
+        return load_config(path)
+
+
 async def _ready(cfg: Config, name: str, db: sqlite3.Connection) -> tuple[Summary, list[Case]]:
     """Make sure a suite's samples and scores exist. Free when they already do."""
     s = await run_suite(cfg, name)
@@ -118,7 +124,7 @@ def run(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Generate and score every missing sample. Existing samples are never regenerated."""
-    cfg = load_config(config)
+    cfg = _load(config)
     s = _execute(run_suite(cfg, suite, limit=limit, max_minutes=max_minutes, dry_run=dry_run))
     rows = _summary(s)
     if dry_run:
@@ -137,7 +143,7 @@ def run(
 @app.command()
 def score(suite: str, config: ConfigOpt = DEFAULT_CONFIG) -> None:
     """Re-score stored samples with the current scorers. Calls no model."""
-    cfg = load_config(config)
+    cfg = _load(config)
     db = store.connect(cfg.db_path)
     rows = db.execute(
         "SELECT fingerprint FROM runs WHERE suite=? GROUP BY fingerprint", (suite,)
@@ -150,7 +156,7 @@ def score(suite: str, config: ConfigOpt = DEFAULT_CONFIG) -> None:
 @app.command("report")
 def report_cmd(suite: str, config: ConfigOpt = DEFAULT_CONFIG) -> None:
     """Score, interval, slices and worst cases for one suite."""
-    cfg = load_config(config)
+    cfg = _load(config)
     db = store.connect(cfg.db_path)
     s, cases = _execute(_ready(cfg, suite, db))
     with _errors():
@@ -162,7 +168,7 @@ def report_cmd(suite: str, config: ConfigOpt = DEFAULT_CONFIG) -> None:
 def selfcheck_cmd(suite: str, config: ConfigOpt = DEFAULT_CONFIG) -> None:
     """Test the eval itself: reference answers must pass, junk answers must fail."""
     with _errors():
-        result = selfcheck(load_config(config), suite)
+        result = selfcheck(_load(config), suite)
     ok = result.pop("ok")
     _show(result)
     typer.secho(
@@ -179,7 +185,7 @@ def compare_cmd(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Compare two suites that share a dataset: BASE is the reference, HEAD the candidate."""
-    cfg = load_config(config)
+    cfg = _load(config)
     db = store.connect(cfg.db_path)
 
     async def work() -> tuple[dict[str, Any], bool]:
@@ -213,7 +219,7 @@ def gate_cmd(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Block a change that makes a suite measurably worse than it is at BASE."""
-    cfg = load_config(config)
+    cfg = _load(config)
     result, is_blocked = _execute(
         run_gate(cfg, suite, base, head, verify_only=verify_only, bundle=bundle)
     )
@@ -237,7 +243,7 @@ def power(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """How many cases the gate needs, from this suite's real scores."""
-    cfg = load_config(config)
+    cfg = _load(config)
     db = store.connect(cfg.db_path)
     s, cases = _execute(_ready(cfg, suite, db))
     conf = cfg.get_suite(suite)
@@ -284,7 +290,7 @@ def aa_cmd(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Compare a suite with itself to measure the gate's real false-alarm rate."""
-    cfg = load_config(config)
+    cfg = _load(config)
     db = store.connect(cfg.db_path)
     s, cases = _execute(_ready(cfg, suite, db))
     conf = cfg.get_suite(suite)
@@ -310,7 +316,7 @@ def bench(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Measure throughput on a few cases and project how long each split will take."""
-    cfg = load_config(config)
+    cfg = _load(config)
     s = _execute(run_suite(cfg, suite, limit=n))
     db = store.connect(cfg.db_path)
     rows = db.execute(
@@ -375,7 +381,7 @@ async def _doctor(cfg: Config) -> bool:
 @app.command()
 def doctor(config: ConfigOpt = DEFAULT_CONFIG) -> None:
     """Check that every suite's model is reachable, present and able to generate."""
-    raise typer.Exit(0 if _execute(_doctor(load_config(config))) else 1)
+    raise typer.Exit(0 if _execute(_doctor(_load(config))) else 1)
 
 
 @dataset_app.command("lint")
@@ -388,12 +394,16 @@ def lint_cmd(
     base_url: str = "http://localhost:11434",
 ) -> None:
     """Check a dataset for duplicates, label problems and leakage."""
-    with _errors():
-        cases = datasets.load(path)
     files = (
         [] if prompts is None else [prompts] if prompts.is_file() else sorted(prompts.rglob("*"))
     )
-    context = "\n".join(f.read_text(encoding="utf-8") for f in files if f.is_file())
+    files = [f for f in files if f.is_file()]
+    with _errors():
+        cases = datasets.load(path)
+        if prompts is not None and not files:
+            # A mistyped path must not pass as "nothing leaked into the prompts".
+            raise ValueError(f"no prompt files found at {prompts}")
+    context = "\n".join(f.read_text(encoding="utf-8") for f in files)
     result = datasets.lint(cases, context)
     near = result.pop("near_duplicates")
     ok = result.pop("ok")
@@ -423,7 +433,9 @@ def split_cmd(
         sizes = {name: int(count) for name, count in (item.split("=") for item in size)}
     except ValueError as e:
         raise typer.BadParameter("each --size must look like name=count") from e
-    for name, cases in datasets.split(datasets.load(src), sizes, seed).items():
+    with _errors():
+        splits = datasets.split(datasets.load(src), sizes, seed)
+    for name, cases in splits.items():
         datasets.save(out / f"{name}.jsonl", cases)
         typer.echo(f"{name}: {len(cases)} cases, version {datasets.version(cases)}")
 
@@ -435,7 +447,7 @@ def judge_run(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Judge every stored sample that has no verdict yet. Slow, and resumable."""
-    cfg = load_config(config)
+    cfg = _load(config)
     db = store.connect(cfg.db_path)
 
     async def work() -> dict[str, int]:
@@ -471,10 +483,10 @@ def judge_probe(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Test the judge on answers built to be right or wrong in known ways."""
-    cfg = load_config(config)
+    cfg = _load(config)
     with _errors():
         items = [
-            json.loads(line) for line in probes.read_text(encoding="utf-8").splitlines() if line
+            json.loads(line) for line in probes.read_text(encoding="utf-8").split("\n") if line
         ]
     items = [item for item in items if not kind or item["kind"] in kind]
     result = _execute(probe(cfg, suite, items))
@@ -515,7 +527,7 @@ def judge_calibrate(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Compare the judge's stored verdicts with human labels, and optionally with a rule."""
-    cfg = load_config(config)
+    cfg = _load(config)
     db = store.connect(cfg.db_path)
     s, _ = _execute(_ready(cfg, suite, db))
     with _errors():
@@ -547,7 +559,7 @@ def label(
     """Label stored answers by hand, blind: no model name and no judge verdict are shown."""
     import random
 
-    cfg = load_config(config)
+    cfg = _load(config)
     db = store.connect(cfg.db_path)
     with _errors():
         judge = Judge(cfg)
@@ -623,7 +635,7 @@ def perturb_cmd(
         cases = datasets.load(src)
         result = generate.perturb(cases, kind or ["typo", "lowercase", "distractor"], field, seed)
     if paraphrase_model:
-        backend = make_provider(load_config(config).provider[provider])
+        backend = make_provider(_load(config).provider[provider])
 
         async def reword() -> list[Case]:
             try:
@@ -654,7 +666,7 @@ def gen_cmd(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Draft candidate cases from seed material. They still need `dataset review`."""
-    cfg = load_config(config)
+    cfg = _load(config)
     with _errors():
         existing = datasets.load(dataset)
         queued = datasets.load(out) if out.exists() else []
@@ -794,7 +806,7 @@ def queue(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Run several suites back to back, one model at a time, within one time budget."""
-    cfg = load_config(config)
+    cfg = _load(config)
     names = [n for n in (suites or list(cfg.suite)) if not match or fnmatch(n, match)]
     with _errors():
         if not names:
@@ -856,7 +868,7 @@ def usage(
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Model calls, tokens and model time by day, plus what the cache saved."""
-    cfg = load_config(config)
+    cfg = _load(config)
     db = store.connect(cfg.db_path)
     since = (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
     rows = db.execute(

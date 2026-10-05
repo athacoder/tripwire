@@ -26,6 +26,7 @@ def _cell(text: Any) -> str:
 def _trace(trace_id: str | None, base_url: str | None) -> str:
     if not trace_id:
         return ""
+    trace_id = str(trace_id)  # a target may report a number
     return f"[{trace_id[:8]}]({base_url.rstrip('/')}/traces/{trace_id})" if base_url else trace_id
 
 

@@ -46,7 +46,7 @@ def _shuffle_lines(text: str, rng: random.Random) -> str:
     """Reorder the lines after the first: the facts stay, their order changes."""
     head, *rest = text.split("\n")
     body = [line for line in rest if line.strip()]
-    if len(body) < 2:
+    if len(set(body)) < 2:  # nothing to reorder; identical lines would never look shuffled
         return text
     shuffled = body[:]
     while shuffled == body:
@@ -137,7 +137,7 @@ def _schema(values: list[Any]) -> dict[str, Any]:
         return {"type": "string"}
     if kinds == {bool}:
         return {"type": "boolean"}
-    if kinds <= {int, float}:
+    if kinds and kinds <= {int, float}:
         return {"type": "number"}
     if kinds == {dict} and len({tuple(sorted(v)) for v in values}) == 1:
         keys = sorted(values[0])
@@ -271,7 +271,7 @@ async def import_tracelens(url: str, limit: int = 200, transport: Any = None) ->
         while len(summaries) < limit:
             page = await api.call("GET", f"/api/v1/traces?limit=200&offset={len(summaries)}")
             summaries += page["items"]
-            if not page.get("has_more"):
+            if not page.get("has_more") or not page["items"]:  # an empty page cannot advance
                 break
         out = []
         for item in summaries[:limit]:

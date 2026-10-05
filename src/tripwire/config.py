@@ -6,10 +6,19 @@ import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+GUARDRAILS = (
+    "output_tokens_ratio_max",
+    "latency_p95_ratio_max",
+    "truncation_rate_max",
+    "error_rate_max",
+)
 
 
 class ProviderCfg(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["ollama", "openai_compat", "mock"]
     base_url: str = "http://localhost:11434"
     api_key_env: str | None = None  # name of the environment variable, never the key itself
@@ -38,27 +47,35 @@ class SuiteCfg(BaseModel):
 
     dataset: str
     target: str
-    reps: int = 1
+    reps: int = Field(1, ge=1)
     scorers: list[str] = Field(default_factory=lambda: ["exact"])
     primary_metric: str = "exact.pass"  # "<scorer>.<metric>"; this one decides the verdict
-    alpha: float = 0.05  # one-sided error rate of each interval bound
-    margin: float = 0.03  # largest drop in the primary metric that is still acceptable
+    alpha: float = Field(0.05, gt=0, lt=0.5)  # one-sided error rate of each interval bound
+    # Largest drop in the primary metric that is still acceptable.
+    margin: float = Field(0.03, ge=0)
     # What an undecided gate does: block, let it through with a warning, or "escalate":
     # look at `first_stage` cases first and run the rest only if those cannot decide.
     on_inconclusive: Literal["fail", "warn", "escalate"] = "fail"
-    first_stage: int = 250
-    # Limits on the candidate: output_tokens_ratio_max, latency_p95_ratio_max,
-    # truncation_rate_max, error_rate_max.
+    first_stage: int = Field(250, ge=2)
+    # Limits on the candidate, by the names in GUARDRAILS.
     guardrails: dict[str, float] = Field(default_factory=dict)
     # Filled in when the config is loaded: judge criterion -> version of its prompt.
     judge_versions: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("guardrails")
+    @classmethod
+    def _known_guardrails(cls, limits: dict[str, float]) -> dict[str, float]:
+        unknown = sorted(set(limits) - set(GUARDRAILS))
+        if unknown:  # a misspelt limit would otherwise simply never be checked
+            raise ValueError(f"unknown guardrail {unknown[0]!r} (known: {', '.join(GUARDRAILS)})")
+        return limits
 
 
 class JudgeCfg(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: str = "local"
-    model: str = "llama3.1:8b"
+    model: str = "qwen2.5:7b"  # the judge this project measured; see docs/judge.md
     system: str  # path to the judge's instructions
     template: (
         str  # path to the user template: case input fields, {reference}, {answer}, {criterion}
@@ -73,6 +90,8 @@ def _default_providers() -> dict[str, ProviderCfg]:
 
 
 class Config(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # a misspelt setting must not be ignored
+
     root: Path
     db: str = "tripwire.db"
     bundles: str = "bundles"

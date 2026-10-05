@@ -13,7 +13,7 @@ from typing import Any
 
 from .config import TargetCfg
 from .models import Case, sha
-from .providers import HttpProvider, Provider, Request, Response
+from .providers import HttpProvider, Provider, Request, Response, context_needed
 
 
 def seed_for(case_hash: str, rep: int) -> int:
@@ -105,12 +105,12 @@ class Target:
     def guard(self, cases: list[Case]) -> None:
         """Refuse to start if a prompt could overflow the context window.
 
-        Ollama drops the overflow and answers anyway, so this has to be caught up front.
+        Ollama cuts an oversized prompt and answers anyway (0.35 keeps only about half the
+        window), so this has to be caught up front.
         """
         if self.cfg.kind != "prompt" or not cases:
             return
-        longest = max(len(self.system) + len(self.render(c)) for c in cases)
-        need = longest // 3 + self.cfg.max_tokens  # 3 chars per token overestimates English
+        need = max(context_needed(self.request(c, 0)) for c in cases)
         if need > self.cfg.num_ctx:
             raise ValueError(
                 f"longest prompt needs about {need} tokens but num_ctx is {self.cfg.num_ctx}"

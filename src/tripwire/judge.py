@@ -21,7 +21,7 @@ import numpy as np
 from . import datasets, stats, store
 from .config import Config
 from .models import Case, sha
-from .providers import Provider, ProviderError, Request, make_provider
+from .providers import Provider, ProviderError, Request, context_needed, make_provider
 
 VERDICT_SCHEMA = {
     "type": "object",
@@ -182,6 +182,17 @@ async def judge_suite(
     counts = {"judged": 0, "failed": 0, "pending": len(todo)}
     if not todo:
         return counts
+    # The check the runner makes for a target. A judge prompt that overflows would be cut
+    # without an error, and the verdict would then be about part of the documents.
+    need = max(
+        context_needed(judge.request(cases[row["case_hash"]], row["output"], criterion))
+        for row, criterion in todo
+    )
+    if need > judge.conf.num_ctx:
+        raise ValueError(
+            f"longest judge prompt needs about {need} tokens but the judge's num_ctx is "
+            f"{judge.conf.num_ctx}"
+        )
     provider = provider or judge.provider()
     deadline = None if max_minutes is None else time.monotonic() + max_minutes * 60
     try:

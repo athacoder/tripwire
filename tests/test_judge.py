@@ -168,6 +168,15 @@ def test_the_time_budget_stops_judging_cleanly(qa):
     assert stopped == {"judged": 0, "failed": 0, "pending": 60}
 
 
+def test_a_judge_prompt_that_cannot_fit_is_refused_before_any_call(qa):
+    s = asyncio.run(run_suite(qa, "qa"))
+    qa.judge.num_ctx = 64  # the judge's own answer allowance is already larger
+    backend = Scripted([verdict("yes")])
+    with pytest.raises(ValueError, match="judge prompt needs about"):
+        asyncio.run(judge_suite(qa, "qa", s.fingerprint, store.connect(qa.db_path), backend))
+    assert backend.calls == 0 and judged(qa) == 0
+
+
 def test_failed_verdicts_leave_the_sample_unscored(qa):
     s = asyncio.run(run_suite(qa, "qa"))
     db = store.connect(qa.db_path)

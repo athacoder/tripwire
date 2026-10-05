@@ -165,8 +165,9 @@ generating them again reproduced all 50 outputs on the reference machine.
 
 Failed requests are never scored. A timeout, an HTTP error or a crash inside a target goes
 to an `errors` table, a cut-off answer is stored as `truncated`, and neither is confused
-with a wrong answer. Before a run starts, Tripwire checks that the longest prompt fits the
-context window, because Ollama silently drops whatever does not fit.
+with a wrong answer. Before a run or a judging pass starts, Tripwire checks that the
+longest prompt fits the context window, because Ollama cuts a prompt that does not fit and
+answers anyway: given 2,308 tokens for a 2,048-token window, it kept 1,027 and said nothing.
 
 **Scores** carry the scorer's version. Changing a scorer adds rows instead of rewriting
 history, and re-scoring stored outputs costs nothing.

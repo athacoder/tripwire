@@ -15,7 +15,9 @@ from .models import Case, sha
 
 def load(path: Path) -> list[Case]:
     cases = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    # Split on "\n" only: splitlines() also breaks on U+2028 and U+0085, which JSON may
+    # carry unescaped inside a string, and a case containing one could not be read back.
+    for number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
         if line.strip():
             try:
                 cases.append(Case.model_validate_json(line))

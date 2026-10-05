@@ -5,7 +5,15 @@ import httpx
 import pytest
 
 from tripwire.config import ProviderCfg
-from tripwire.providers import Mock, Ollama, OpenAICompat, ProviderError, Request, make_provider
+from tripwire.providers import (
+    Mock,
+    Ollama,
+    OpenAICompat,
+    ProviderError,
+    Request,
+    context_needed,
+    make_provider,
+)
 
 # Shape recorded from Ollama 0.35.0 (/api/chat, stream off).
 OLLAMA_REPLY = {
@@ -102,6 +110,11 @@ def test_openai_compat_parses_usage_and_stop_reason(monkeypatch):
         8,
     )
     assert reply.latency_ms is None  # the runner falls back to its own clock
+
+
+def test_the_context_estimate_assumes_dense_text():
+    # 5,000 characters at 2.5 per token, plus room for the answer.
+    assert context_needed(Request("m", "1" * 2500, "2" * 2500, max_tokens=100)) == 2100
 
 
 def test_a_named_key_must_be_set(monkeypatch):

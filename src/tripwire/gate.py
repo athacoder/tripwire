@@ -34,6 +34,8 @@ SAMPLE_COLUMNS = (
 
 def config_at(cfg: Config, ref: str, into: Path) -> Config:
     """The project as it was at a git ref, unpacked into a scratch directory."""
+    if ref.startswith("-"):  # git would read it as an option, e.g. --output=<any file>
+        raise ValueError(f"not a git ref: {ref!r}")
     done = subprocess.run(
         ["git", "archive", "--format=tar", ref], cwd=cfg.root, capture_output=True, check=False
     )

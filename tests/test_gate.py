@@ -96,6 +96,11 @@ def test_two_committed_refs_can_be_compared(repo):
     assert result["verdict"] == "REGRESSED"
     with pytest.raises(ValueError, match="cannot read git ref"):
         asyncio.run(gate(repo, "demo", "no-such-ref"))
+    # A "ref" that git would read as an option must never reach it.
+    planted = repo.root / "planted.tar"
+    with pytest.raises(ValueError, match="not a git ref"):
+        asyncio.run(gate(repo, "demo", f"--output={planted}"))
+    assert not planted.exists()
 
 
 def test_bundles_let_ci_reach_the_same_verdict_without_a_model(repo, monkeypatch):

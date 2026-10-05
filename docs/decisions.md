@@ -155,6 +155,23 @@ after all generation.
 dataset file. The version says which dataset a sample belongs to, not how much of it has
 been run so far; bundles are filed under it.
 
+## A server's address is part of the fingerprint only when there is no digest
+
+An Ollama model is identified by its digest, so the address of the server is left out:
+the same model on another machine is the same target, and its samples are reused. The
+OpenAI-compatible API reports no digest. There the address is the only thing that tells
+two servers apart, so it goes into the fingerprint; otherwise two servers offering one
+model name would share samples, and moving a target from one to the other would look to
+the gate like no change at all.
+
+## The context check assumes 2.5 characters per token
+
+The check has to run before any call, without a tokenizer. English prose here measured
+3.5 to 4 characters per token, but the invoice prompts, which are mostly numbers,
+measured 2.55, so the estimate uses 2.5 and errs towards asking for a larger window.
+The judge's prompts get the same check as a target's. It cannot protect a target served
+through the OpenAI-compatible API, which has no way to set the window.
+
 ## Not built yet
 
 
