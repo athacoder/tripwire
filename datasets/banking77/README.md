@@ -25,6 +25,7 @@ intents.
 | `dev.jsonl` | 200 | iterating on prompts |
 | `gate.jsonl` | 700 | the regression gate |
 | `reference.jsonl` | 1,500 | measuring the gate's own error rates |
+| `robust.jsonl` | 762 | robustness: the 200 dev cases plus typo, lower-case and distractor variants |
 
 The 10,671 remaining rows are not stored here. The few-shot examples in
 `prompts/banking_intent/system.md` are drawn from them, so no evaluated case appears in

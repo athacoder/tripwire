@@ -69,3 +69,9 @@ dataset        = "datasets/policy_qa/qa.jsonl"
 target         = "targets/policy_qa_no_abstain.toml"
 scorers        = ["fact", "judge"]
 primary_metric = "judge.correct"
+
+# Robustness: the dev cases plus variants whose answer must not change (typos, lower
+# case, an irrelevant extra sentence). `tripwire report` shows a slice per perturbation.
+[suite.banking-intent-robust]
+dataset = "datasets/banking77/robust.jsonl"
+target  = "targets/banking_intent.toml"

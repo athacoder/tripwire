@@ -25,7 +25,7 @@ jobs:
       - run: pytest -q
       # The committed data must stay clean and must not leak into the prompts.
       - run: |
-          for split in dev gate reference; do
+          for split in dev gate reference robust; do
             tripwire dataset lint datasets/banking77/$split.jsonl --prompts prompts/banking_intent
           done
           tripwire dataset lint datasets/invoices/extract.jsonl --prompts prompts/invoice_extract
