@@ -20,10 +20,11 @@ commit (`tripwire gate banking-intent --base HEAD`, 700 cases, `gemma3:4b`; outp
 ```text
 Tripwire: REGRESSED · banking-intent        This blocks the merge.
 
-| metric     | base  | head  | Δ      | 90% interval     | p      |
-| exact.pass | 0.596 | 0.550 | -0.046 | [-0.067, -0.024] | 0.0010 |
+| metric     | base  | head  | Δ      | 95% interval     | p      |
+| exact.pass | 0.596 | 0.550 | -0.046 | [-0.071, -0.021] | 0.0010 |
 
-margin 0.030 · α 0.05 · paired on 700 of 700 cases · McNemar p 0.0007
+margin 0.030 · α 0.025 · paired on 700 of 700 cases · McNemar p 0.0007
+Stage 2 of 2: the first-stage subset could not decide, so every case was run.
 
 Guardrails   output tokens 0.930 (limit 1.25) ok · latency p95 1.272 (limit 1.5) ok
 Flips        59 broke · 27 fixed · 358 stable pass · 256 stable fail
@@ -64,6 +65,7 @@ code 1. The method is described in [docs/methodology.md](docs/methodology.md).
 | Gate against a git ref, sample bundles, CI workflow with a pull-request comment | done |
 | LLM judge: versioned verdicts, probes with known answers, blind labelling, calibration | done |
 | Growing datasets: perturbations, model-drafted cases, TraceLens import, human review | done |
+| Two-stage gate, run queue, usage report | done |
 | Benchmark of the gate itself on seeded regressions | planned |
 | Dashboard | planned |
 
@@ -128,6 +130,8 @@ author's machine. That is fine for a solo project and worth knowing for a team.
 | `tripwire gate SUITE --base REF` | Compares the working tree (or `--head REF`) against a git ref |
 | `tripwire power SUITE` | Cases needed for a given drop, by formula and by simulation |
 | `tripwire aa SUITE` | Compares a suite with itself to measure the false-alarm rate |
+| `tripwire queue [SUITES]` | Runs suites back to back, one model at a time, within a time budget |
+| `tripwire usage` | Model calls, tokens and model time by day, and what the cache saved |
 | `tripwire judge run SUITE` | Judges stored answers that have no verdict yet. Resumable |
 | `tripwire judge probe SUITE --probes FILE` | Tests the judge on answers built to be right or wrong in known ways |
 | `tripwire label SUITE` | Blind hand-labelling of stored answers |
@@ -173,15 +177,19 @@ RTX 3050 laptop GPU (6 GB), `gemma3:4b`, Banking77 gate split (700 cases).
 
 | | |
 |---|---|
-| Speed | 0.36 s per case; the gate split runs in about four minutes |
+| Speed | 0.29 s per case; the 700-case gate split runs in under four minutes |
 | Baseline | `exact.pass` 0.596, 90% interval [0.564, 0.626] |
 | Rerun noise | 1.9% of cases change between two repetitions |
 | Where the variance is | 96% between cases, 4% within: add cases, not repetitions |
 | A/A false-alarm rate | 4.4% over 500 self-comparisons (nominal ceiling 10%) |
 | Few-shot examples removed | Δ −0.046 [−0.067, −0.024], `REGRESSED` |
 
+| Two-stage gate | a whitespace-only prompt edit passed on 250 of 700 cases |
+| Prompt layout | sharing the prompt prefix between cases makes a run 2.7 times faster |
+
 These describe one model on one dataset. A benchmark of the gate across many seeded
-changes is planned and is the number that will matter.
+changes is planned and is the number that will matter. Throughput and the two-stage
+gate are covered in [docs/running-at-scale.md](docs/running-at-scale.md).
 
 ## Judged metrics
 
@@ -258,7 +266,8 @@ prompts/        system and user prompts, versioned in git
 targets/        one file per system under test
 scripts/        dataset importers and generators
 tests/          run on a deterministic mock provider
-docs/           methodology, the judge, growing datasets, design notes
+docs/           methodology, the judge, growing datasets, running at scale,
+                design notes
 ```
 
 ## License

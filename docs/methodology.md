@@ -49,6 +49,14 @@ demonstrate that it is not worse by more than `δ`; with too little data the ans
 A gate is also blocked when a guardrail's whole interval is over its limit, or when a
 slice regresses significantly.
 
+## Looking twice
+
+With `on_inconclusive = "escalate"` the gate judges a fixed, stratified subset first
+and the whole set only if the subset is `INCONCLUSIVE`. Each look uses `alpha / 2`, so
+the chance of a false alarm at either look is at most `alpha` (a union bound). The
+even split is conservative; it costs some power, measured in
+[running-at-scale.md](running-at-scale.md).
+
 ## Slices
 
 Each tag with at least 30 paired cases gets its own Δ, interval and permutation p-value.

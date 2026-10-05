@@ -134,6 +134,27 @@ own guesses) produces numbers that look fine, so a warning would be ignored.
 hashes. They reuse samples already generated for the source dataset, and the report can
 pair each variant with its parent without a second file.
 
+## The first stage is a fixed subset, and each look gets half of alpha
+
+The two-stage gate's first 250 cases are the same every time: a stratified draw with a
+fixed seed, a function of the dataset alone. A subset re-drawn per run would let a
+borderline change pass by luck on a retry. Splitting alpha evenly is the simplest rule
+that keeps the overall false-alarm rate honest; it is conservative, and the docs say what
+it costs.
+
+## The queue orders by model, and concurrency stays at 1
+
+Measured, not assumed: two or four simultaneous requests to a local model finish no
+sooner than one at a time, and alternating between two models reloads each on every
+switch. So the queue sorts suites by model and runs them in sequence, and judging happens
+after all generation.
+
+## A subset run keeps the dataset's identity
+
+`--limit`, a first-stage subset and a full run all record the version of the whole
+dataset file. The version says which dataset a sample belongs to, not how much of it has
+been run so far; bundles are filed under it.
+
 ## Not built yet
 
 
@@ -141,7 +162,9 @@ pair each variant with its parent without a second file.
 - A rate limiter for hosted APIs: retries with backoff cover the free tiers so far.
 - A pairwise judge (which of two answers is better). The three suites all have a
   reference answer, so nothing needs it yet.
-- Two-stage gating (a cheap first look, escalating only when undecided).
+- Hosted batch APIs and provider-side prompt caching: they only matter with a paid
+  provider.
+- A group-sequential boundary for the two-stage gate, in place of the even alpha split.
 - A composite GitHub Action; the workflow file is the integration for now.
 - `import_bundle` picks one bundle per static key. Two digests of the same tag would need
   a rule for which to prefer.
