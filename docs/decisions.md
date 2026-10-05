@@ -115,6 +115,25 @@ longer available as a comparison system for judged suites.
 more failures to label, but the prediction-powered estimate is only valid when the
 labelled answers are a random subset of all answers.
 
+## Candidates are files, and review is the only way into a dataset
+
+Drafted and imported cases live in a candidates JSONL file with a status per case, not in
+the database: they are small, they belong next to the data in git while under review, and
+a file can be read without the tool. `dataset review` writes both files after every
+decision. There is no flag to skip review.
+
+## A run refuses a dataset drafted by its own model
+
+If any case's provenance says it was drafted by the model under test, the run stops with
+an error instead of a warning. The failure mode it prevents (a model graded against its
+own guesses) produces numbers that look fine, so a warning would be ignored.
+
+## Robustness sets keep their originals
+
+`dataset perturb` writes the unmodified cases too, tagged `perturb:none`, with unchanged
+hashes. They reuse samples already generated for the source dataset, and the report can
+pair each variant with its parent without a second file.
+
 ## Not built yet
 
 

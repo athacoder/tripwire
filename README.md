@@ -63,6 +63,7 @@ code 1. The method is described in [docs/methodology.md](docs/methodology.md).
 | Paired comparison, verdicts, slices, guardrails, power analysis, A/A calibration | done |
 | Gate against a git ref, sample bundles, CI workflow with a pull-request comment | done |
 | LLM judge: versioned verdicts, probes with known answers, blind labelling, calibration | done |
+| Growing datasets: perturbations, model-drafted cases, TraceLens import, human review | done |
 | Benchmark of the gate itself on seeded regressions | planned |
 | Dashboard | planned |
 
@@ -133,6 +134,10 @@ author's machine. That is fine for a solo project and worth knowing for a team.
 | `tripwire judge calibrate SUITE` | Judge against human labels and against a rule-based check |
 | `tripwire dataset lint FILE` | Duplicates, conflicting labels, empty fields, leakage into prompts |
 | `tripwire dataset split SRC OUT --size dev=200 ...` | Disjoint stratified splits |
+| `tripwire dataset perturb SRC OUT` | Adds variants whose answer must not change: a robustness set |
+| `tripwire dataset gen DATASET SEED OUT --model M` | A model drafts candidate cases; a second call screens them |
+| `tripwire dataset import-tracelens OUT` | Failures diagnosed by TraceLens become candidate cases |
+| `tripwire dataset review CANDIDATES --into DATASET` | Approve, correct or reject candidates by hand |
 
 Suites live in `tripwire.toml`; each names a dataset, a target file, its scorers, the
 primary metric, the margin and optional guardrails.
@@ -203,6 +208,18 @@ half.
 No human labels have been collected yet. `tripwire label` and `tripwire judge calibrate`
 are ready for them.
 
+## Robustness and growing a dataset
+
+`tripwire dataset perturb` adds variants of each case whose answer must not change, and
+reports pair every variant with its original. On Banking77 no perturbation moved the
+average score detectably, yet 7–10% of individual answers changed under a typo, lower
+case or an irrelevant extra sentence, against 1.9% from simply re-running the prompt.
+
+New cases can also be drafted by a model or imported from failures that
+[TraceLens](https://github.com/athacoder/tracelens) diagnosed. Both produce candidates
+only; nothing enters a dataset until a person approves it, and a model is never scored
+against cases it drafted. See [docs/growing-datasets.md](docs/growing-datasets.md).
+
 ## Other backends
 
 Ollama on `localhost` is the default. Anything that speaks the OpenAI chat API also
@@ -234,14 +251,14 @@ api_key_env = "GROQ_API_KEY"   # the variable's name; the key itself is never st
 ## Layout
 
 ```text
-src/tripwire/   models, datasets, providers, targets, runner, scorers, judge,
-                stats, compare, report, gate, store, cli
+src/tripwire/   models, datasets, generate, providers, targets, runner, scorers,
+                judge, stats, compare, report, gate, store, cli
 datasets/       JSONL cases and dataset cards
 prompts/        system and user prompts, versioned in git
 targets/        one file per system under test
 scripts/        dataset importers and generators
 tests/          run on a deterministic mock provider
-docs/           methodology, the judge, and design notes
+docs/           methodology, the judge, growing datasets, design notes
 ```
 
 ## License
