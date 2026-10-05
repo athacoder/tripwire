@@ -793,6 +793,21 @@ def _two_stage_report(
         )
 
 
+def _stay_awake() -> None:
+    """Ask Windows not to sleep from idleness while this process runs.
+
+    A queue is meant to run unattended, and a laptop that dozes off after fifteen idle
+    minutes ends it early. The request changes no setting and dies with the process; a
+    closed lid still sleeps. Elsewhere, start the queue under `caffeinate -i` (macOS) or
+    `systemd-inhibit` (Linux).
+    """
+    if sys.platform == "win32":
+        import ctypes
+
+        continuous, system_required = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(continuous | system_required)
+
+
 @app.command()
 def queue(
     suites: Annotated[
@@ -816,6 +831,7 @@ def queue(
     names.sort(key=lambda n: (targets[n].provider, targets[n].model, targets[n].num_ctx))
     db = store.connect(cfg.db_path)
     started = time.monotonic()
+    _stay_awake()
 
     def left() -> float | None:
         if max_minutes is None:
