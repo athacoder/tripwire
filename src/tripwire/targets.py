@@ -122,12 +122,20 @@ class Target:
             return await self.provider.complete(self.request(case, seed))
         if self.http:
             body = {"input": case.input, "seed": seed}
-            out = (await self.http.call("POST", self.cfg.url or "", body))["output"]
+            out = await self.http.call("POST", self.cfg.url or "", body)
         elif inspect.iscoroutinefunction(self.fn):
             out = await self.fn(case.input)
         else:
             out = await asyncio.to_thread(self.fn, case.input)
-        return Response(text=str(out), model=self.cfg.entry or self.cfg.url or "")
+        # A target may return just its answer, or {"output": ..., "trace_id": ...}. The
+        # whole reply is kept with the sample, so a trace id can link a regression to
+        # the pipeline stage that caused it.
+        raw = out if isinstance(out, dict) else {"output": out}
+        if "output" not in raw:
+            raise ValueError("a target must return its answer, or a dict with an 'output' key")
+        return Response(
+            text=str(raw["output"]), model=self.cfg.entry or self.cfg.url or "", raw=raw
+        )
 
     async def aclose(self) -> None:
         await self.provider.aclose()

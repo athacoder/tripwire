@@ -90,6 +90,17 @@ async def run_suite(
     suite = cfg.get_suite(name)
     cases = datasets.load(cfg.root / suite.dataset)[:limit]
     target = await resolve(cfg, name, provider)
+    # Expected answers written by a model reward imitating that model. Scoring the same
+    # model against them would flatter it, so that is refused outright.
+    own = sum(
+        bool(target.cfg.model) and c.provenance.get("drafted_by") == target.cfg.model for c in cases
+    )
+    if own:
+        await target.aclose()
+        raise ValueError(
+            f"{own} cases were drafted by {target.cfg.model}, the model under test; "
+            "its own drafts cannot be its answer key"
+        )
     db = store.connect(cfg.db_path)
     try:
         target.guard(cases)

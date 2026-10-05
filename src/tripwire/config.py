@@ -79,6 +79,7 @@ class Config(BaseModel):
     backoff: float = 1.0  # base delay in seconds, doubled per attempt
     provider: dict[str, ProviderCfg] = Field(default_factory=_default_providers)
     judge: JudgeCfg | None = None
+    tracelens_url: str | None = None  # dashboard address, for trace links in reports
     suite: dict[str, SuiteCfg] = Field(default_factory=dict)
 
     @property

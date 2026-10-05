@@ -15,7 +15,7 @@ from typing import Annotated, Any
 import httpx
 import typer
 
-from . import __version__, datasets, report, stats, store
+from . import __version__, datasets, generate, report, stats, store
 from .compare import blocked, compare, matrix, summarise
 from .config import Config, load_config
 from .gate import gate as run_gate
@@ -188,7 +188,7 @@ def compare_cmd(
         return result, blocked(result, suite)
 
     result, is_blocked = _execute(work())
-    text = report.comparison(f"{base} → {head}", result, is_blocked)
+    text = report.comparison(f"{base} → {head}", result, is_blocked, cfg.tracelens_url)
     if out:
         out.write_text(text, encoding="utf-8", newline="\n")
     typer.echo(text)
@@ -214,7 +214,7 @@ def gate_cmd(
     result, is_blocked = _execute(
         run_gate(cfg, suite, base, head, verify_only=verify_only, bundle=bundle)
     )
-    text = report.comparison(suite, result, is_blocked)
+    text = report.comparison(suite, result, is_blocked, cfg.tracelens_url)
     if out:
         out.write_text(text, encoding="utf-8", newline="\n")
     typer.echo(text)
@@ -589,3 +589,165 @@ def label(
                 }
                 store.insert(db, "human_labels", [entry], "OR REPLACE")
     typer.echo("done. Run `tripwire judge calibrate` to compare the judge with your labels.")
+
+
+@dataset_app.command("perturb")
+def perturb_cmd(
+    src: Path,
+    out: Path,
+    kind: Annotated[
+        list[str] | None,
+        typer.Option(help="typo, lowercase, distractor, shuffle_lines; repeatable."),
+    ] = None,
+    field: Annotated[
+        str | None, typer.Option(help="Input field to change (default: the last).")
+    ] = None,
+    paraphrase_model: Annotated[
+        str | None, typer.Option(help="Also add model-written paraphrases, using this model.")
+    ] = None,
+    provider: str = "local",
+    seed: int = 0,
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Write the cases plus variants whose answer must not change: a robustness set."""
+    with _errors():
+        cases = datasets.load(src)
+        result = generate.perturb(cases, kind or ["typo", "lowercase", "distractor"], field, seed)
+    if paraphrase_model:
+        backend = make_provider(load_config(config).provider[provider])
+
+        async def reword() -> list[Case]:
+            try:
+                return await generate.paraphrase(backend, paraphrase_model, cases, field)
+            finally:
+                await backend.aclose()
+
+        result += _execute(reword())
+    datasets.save(out, result)
+    counts: dict[str, int] = {}
+    for case in result:
+        counts[case.tags[-1]] = counts.get(case.tags[-1], 0) + 1
+    _show({**counts, "written to": out})
+
+
+@dataset_app.command("gen")
+def gen_cmd(
+    dataset: Path,
+    seed_file: Path,
+    out: Path,
+    model: Annotated[str, typer.Option(help="Model that drafts the cases.")],
+    verifier: Annotated[
+        str | None, typer.Option(help="Model that screens them (default: same).")
+    ] = None,
+    n: Annotated[int, typer.Option(help="Cases to ask for.")] = 10,
+    examples: Annotated[int, typer.Option(help="Existing cases shown as the format.")] = 5,
+    provider: str = "local",
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Draft candidate cases from seed material. They still need `dataset review`."""
+    cfg = load_config(config)
+    with _errors():
+        existing = datasets.load(dataset)
+        queued = datasets.load(out) if out.exists() else []
+        seed_text = seed_file.read_text(encoding="utf-8")
+    backend = make_provider(cfg.provider[provider])
+
+    async def work() -> tuple[list[Case], dict[str, int]]:
+        try:
+            return await generate.draft(
+                backend,
+                model,
+                verifier or model,
+                existing[:examples],
+                seed_text,
+                n,
+                existing + queued,
+            )
+        finally:
+            await backend.aclose()
+
+    kept, dropped = _execute(work())
+    datasets.save(out, queued + kept)
+    _show({"drafted and kept": len(kept), **{f"dropped: {k}": v for k, v in dropped.items()}})
+    typer.echo(f"review them with: tripwire dataset review {out} --into {dataset}")
+
+
+@dataset_app.command("import-tracelens")
+def import_tracelens_cmd(
+    out: Path,
+    url: Annotated[
+        str, typer.Option(help="Address of the TraceLens API.")
+    ] = "http://localhost:8000",
+    limit: Annotated[int, typer.Option(help="Most recent traces to look at.")] = 200,
+) -> None:
+    """Turn failures diagnosed by TraceLens into candidate regression cases."""
+    queued = datasets.load(out) if out.exists() else []
+    known = {c.provenance.get("trace_id") for c in queued}
+    found = _execute(generate.import_tracelens(url, limit))
+    fresh = [c for c in found if c.provenance["trace_id"] not in known]
+    datasets.save(out, queued + fresh)
+    typer.echo(f"{len(found)} diagnosed failures, {len(fresh)} new candidates written to {out}")
+    typer.echo("each needs an expected answer: tripwire dataset review ... --into <dataset>")
+
+
+@dataset_app.command("review")
+def review_cmd(
+    candidates: Path,
+    into: Annotated[Path, typer.Option(help="Dataset file that approved cases are added to.")],
+    reviewer: Annotated[str, typer.Option(help="Your name, stored with each approval.")] = "me",
+) -> None:
+    """Approve, correct or reject candidate cases. Only approved ones enter the dataset."""
+    with _errors():
+        queue = datasets.load(candidates)
+        dataset = datasets.load(into) if into.exists() else []
+    known = {c.hash for c in dataset}
+    added = 0
+    for index, candidate in enumerate(queue):
+        if candidate.provenance.get("status") != "pending":
+            continue
+        typer.secho(
+            f"--- candidate {index + 1} of {len(queue)} ({candidate.source}) ---", bold=True
+        )
+        for key, value in candidate.input.items():
+            typer.echo(f"{key.upper()}: {value}")
+        typer.echo(f"TAGS: {', '.join(candidate.tags)}")
+        for key, value in candidate.provenance.items():
+            if key != "status" and value is not None:
+                typer.echo(f"{key}: {value}")
+        missing = candidate.expected is None
+        typer.secho(
+            "EXPECTED: (none yet, you must supply it)"
+            if missing
+            else f"EXPECTED: {candidate.expected}",
+            fg="cyan",
+        )
+        choice = typer.prompt("  [a]pprove / [e]dit expected / [r]eject / [s]kip / [q]uit")
+        choice = choice.strip().lower()[:1]
+        if choice == "q":
+            break
+        if choice not in ("a", "e", "r"):
+            continue
+        status = "rejected"
+        if choice != "r":
+            expected = None
+            if choice == "e" or missing:
+                expected = generate.parse_expected(typer.prompt("  expected answer"))
+            case = generate.approve(candidate, reviewer, expected)
+            status = "approved"
+            if case.hash in known:
+                typer.echo("  already in the dataset; not added again")
+            else:
+                dataset.append(case)
+                known.add(case.hash)
+                added += 1
+        queue[index] = Case(
+            input=candidate.input,
+            expected=candidate.expected,
+            tags=candidate.tags,
+            source=candidate.source,
+            provenance={**candidate.provenance, "status": status},
+        )
+        datasets.save(candidates, queue)  # after every decision, so quitting loses nothing
+        datasets.save(into, dataset)
+    left = sum(c.provenance.get("status") == "pending" for c in queue)
+    typer.echo(f"{added} cases added to {into}; {left} candidates still pending")

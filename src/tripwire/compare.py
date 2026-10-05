@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections import defaultdict
 from typing import Any
@@ -34,7 +35,7 @@ def case_scores(
 def _samples(db: sqlite3.Connection, fingerprint: str, reps: int) -> dict[str, list[sqlite3.Row]]:
     out: dict[str, list[sqlite3.Row]] = defaultdict(list)
     query = (
-        "SELECT case_hash, status, output, output_tokens, latency_ms FROM samples "
+        "SELECT case_hash, status, output, output_tokens, latency_ms, response FROM samples "
         "WHERE fingerprint=? AND rep<? ORDER BY rep"
     )
     for row in db.execute(query, (fingerprint, reps)):
@@ -105,6 +106,23 @@ def summarise(
     full = [scores[c.hash] for c in scored if len(scores[c.hash]) == suite.reps]
     if suite.reps > 1 and len(full) > 1:
         out["variance"] = stats.variance(np.array(full))
+
+    # Robustness: each perturbed case against the case it was made from. The answer was
+    # not supposed to change, so "changed" needs no gold label at all.
+    by_hash = {c.hash: float(v) for c, v in zip(scored, values, strict=True)}
+    pairs: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for c in scored:
+        parent = c.provenance.get("parent")
+        if parent in by_hash:
+            pairs[c.provenance.get("perturb", "variant")].append((by_hash[parent], by_hash[c.hash]))
+    out["robustness"] = []
+    for kind, found in sorted(pairs.items()):
+        if len(found) >= MIN_SLICE:
+            original, perturbed = (np.array(x) for x in zip(*found, strict=True))
+            r = stats.paired(original, perturbed, suite.alpha, n_boot=2_000)
+            changed = float((original != perturbed).mean())
+            row = {"kind": kind, "n": r.n, "delta": r.delta, "lo": r.lo, "hi": r.hi}
+            out["robustness"].append({**row, "changed": changed})
     return out
 
 
@@ -225,6 +243,7 @@ def compare(
             "base_output": base_samples[c.hash][0]["output"].strip()[:120],
             "head_output": head_samples[c.hash][0]["output"].strip()[:120],
             "delta": float(d[i]),
+            "trace_id": json.loads(head_samples[c.hash][0]["response"] or "{}").get("trace_id"),
         }
 
     order = np.argsort(d, kind="stable")

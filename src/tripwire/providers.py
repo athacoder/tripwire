@@ -77,7 +77,7 @@ class HttpProvider(Provider):
         except httpx.TransportError as e:
             where = f"{self.client.base_url}{path}"
             raise ProviderError(
-                f"cannot reach {where} ({type(e).__name__}). Is the model server running?",
+                f"cannot reach {where} ({type(e).__name__}). Is the server running?",
                 retryable=True,
             ) from e
         if reply.status_code >= 400:

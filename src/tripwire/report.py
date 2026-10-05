@@ -23,7 +23,15 @@ def _cell(text: Any) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ")
 
 
-def comparison(suite: str, r: dict[str, Any], is_blocked: bool = False) -> str:
+def _trace(trace_id: str | None, base_url: str | None) -> str:
+    if not trace_id:
+        return ""
+    return f"[{trace_id[:8]}]({base_url.rstrip('/')}/traces/{trace_id})" if base_url else trace_id
+
+
+def comparison(
+    suite: str, r: dict[str, Any], is_blocked: bool = False, trace_url: str | None = None
+) -> str:
     verdict = r["verdict"]
     parts = [
         f"## Tripwire: {verdict} · `{suite}`",
@@ -100,18 +108,22 @@ def comparison(suite: str, r: dict[str, Any], is_blocked: bool = False) -> str:
     )
     for title, key in (("Broke", "broke_examples"), ("Fixed", "fixed_examples")):
         if f[key]:
+            # When the target reported a trace id, point at the stage-level diagnosis.
+            traced = any(e.get("trace_id") for e in f[key])
             rows = [
                 [
                     _cell(e["text"]),
                     _cell(e["expected"]),
                     _cell(e["base_output"]),
                     _cell(e["head_output"]),
+                    *([_trace(e.get("trace_id"), trace_url)] if traced else []),
                 ]
                 for e in f[key]
             ]
+            header = ["input", "expected", "base said", "head said", *(["trace"] if traced else [])]
             parts.append(
                 f"**{title}** (top {len(rows)} of {f[key.split('_')[0]]})\n\n"
-                + _table(["input", "expected", "base said", "head said"], rows)
+                + _table(header, rows)
             )
     return "\n\n".join(parts) + "\n"
 
@@ -136,6 +148,21 @@ def single(suite: str, fingerprint: str, s: dict[str, Any]) -> str:
         parts.append(
             f"variance: {v['between']:.4f} between cases, {v['within']:.4f} within "
             f"({v['within_share']:.0%} within; {advice})"
+        )
+    if s.get("robustness"):
+        rows = [
+            [
+                x["kind"],
+                x["n"],
+                f"{x['delta']:+.3f}",
+                f"[{x['lo']:+.3f}, {x['hi']:+.3f}]",
+                f"{x['changed']:.1%}",
+            ]
+            for x in s["robustness"]
+        ]
+        parts.append(
+            "### Robustness\n\nEach perturbed case against the original it was made from.\n\n"
+            + _table(["perturbation", "pairs", "Δ score", "interval", "outcome changed"], rows)
         )
     if s["slices"]:
         rows = [[x["tag"], x["n"], f"{x['mean']:.3f}"] for x in s["slices"]]
