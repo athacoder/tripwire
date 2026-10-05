@@ -188,8 +188,9 @@ def simulate(
         u = rng.random(n)
         h = np.where(b == 1, u >= down, u < up).astype(float)
         if first is None:
-            r = paired(b, h, alpha, fast=True)
-            decision, ran = verdict(r.lo, r.hi, margin), n
+            # Only the interval decides a verdict; paired() would also compute two p-values.
+            _, lo, hi = mean_ci(h - b, 1 - 2 * alpha, fast=True)
+            decision, ran = verdict(lo, hi, margin), n
         else:
             decision, ran = two_stage(b, h, first, alpha, margin)
             early += ran < n or first >= n
@@ -281,10 +282,11 @@ def two_stage(
 
     Each look uses alpha / 2. Returns the verdict and how many cases it had to run.
     """
-    base, head = np.asarray(base, dtype=float), np.asarray(head, dtype=float)
-    early = paired(base[:first], head[:first], alpha / 2, fast=fast)
-    decision = verdict(early.lo, early.hi, margin)
-    if decision != "INCONCLUSIVE" or first >= len(base):
-        return decision, min(first, len(base))
-    full = paired(base, head, alpha / 2, fast=fast)
-    return verdict(full.lo, full.hi, margin), len(base)
+    d = np.asarray(head, dtype=float) - np.asarray(base, dtype=float)
+    # Spending alpha / 2 on a look means a two-sided interval at level 1 - alpha.
+    _, lo, hi = mean_ci(d[:first], 1 - alpha, fast=fast)
+    decision = verdict(lo, hi, margin)
+    if decision != "INCONCLUSIVE" or first >= len(d):
+        return decision, min(first, len(d))
+    _, lo, hi = mean_ci(d, 1 - alpha, fast=fast)
+    return verdict(lo, hi, margin), len(d)
