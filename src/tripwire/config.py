@@ -40,6 +40,8 @@ class TargetCfg(BaseModel):
     max_tokens: int = 64
     format: dict[str, Any] | None = None  # JSON schema the output must follow
     salt: str = ""  # change to force fresh samples
+    # Skip the check that the prompt fits num_ctx. Only for studying what an overflow does.
+    allow_overflow: bool = False
 
 
 class SuiteCfg(BaseModel):

@@ -112,6 +112,12 @@ def test_an_overlong_prompt_is_rejected_before_any_call(project):
         run(project, provider)
     assert provider.calls == 0
 
+    # The check can be lifted on purpose, to study what an overflow does.
+    (project.root / "target.toml").write_text(
+        'provider = "mock"\nmodel = "mock:0.8"\nnum_ctx = 16\nallow_overflow = true\n'
+    )
+    assert run(project, provider, limit=1).statuses["ok"] == 2
+
 
 def test_a_digest_change_during_the_run_aborts_it(project):
     with pytest.raises(ProviderError, match="digest changed"):
@@ -150,6 +156,7 @@ def test_fingerprint_tracks_everything_that_changes_the_output(tmp_path):
     assert base != fingerprint(tmp_path, digest="other")
     assert base != fingerprint(tmp_path, salt="fresh")
     assert base != fingerprint(tmp_path, temperature=0.2)
+    assert base == fingerprint(tmp_path, allow_overflow=True)  # lifts a check, changes no output
 
     (tmp_path / "app" / "logic.py").write_bytes(b"x = 1\r\n")  # a Windows checkout
     assert base == fingerprint(tmp_path)

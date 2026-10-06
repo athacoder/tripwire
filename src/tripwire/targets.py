@@ -62,7 +62,8 @@ class Target:
         # (newlines normalised so Windows and Linux checkouts agree); whitespace is not
         # collapsed, because reformatting a prompt can change what the model says.
         static: dict[str, Any] = {
-            **cfg.model_dump(exclude={"system", "template", "watch", "provider"}),
+            # allow_overflow only lifts a check; it changes no output, so it is left out.
+            **cfg.model_dump(exclude={"system", "template", "watch", "provider", "allow_overflow"}),
             "provider_kind": provider_kind,
             "system": self.system,
             "template": self.template,
@@ -108,7 +109,7 @@ class Target:
         Ollama cuts an oversized prompt and answers anyway (0.35 keeps only about half the
         window), so this has to be caught up front.
         """
-        if self.cfg.kind != "prompt" or not cases:
+        if self.cfg.kind != "prompt" or not cases or self.cfg.allow_overflow:
             return
         need = max(context_needed(self.request(c, 0)) for c in cases)
         if need > self.cfg.num_ctx:

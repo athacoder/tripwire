@@ -172,6 +172,14 @@ measured 2.55, so the estimate uses 2.5 and errs towards asking for a larger win
 The judge's prompts get the same check as a target's. It cannot protect a target served
 through the OpenAI-compatible API, which has no way to set the window.
 
+## `allow_overflow` is left out of the fingerprint
+
+A target can set `allow_overflow = true` to skip the check that its prompt fits the
+context window. It exists to measure what an overflow does, and it lifts a check without
+changing any output, so it is not hashed. Every other target field is, which means adding
+a hashed field later would orphan all stored samples; a new field that cannot change the
+output should be excluded the same way.
+
 ## Not built yet
 
 
