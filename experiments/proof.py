@@ -200,7 +200,12 @@ def decide(base: np.ndarray, head: np.ndarray, alpha: float, seed: int) -> str:
 
 
 def replay(
-    base: np.ndarray, head: np.ndarray, first: int, full: int, draws: int = DRAWS
+    base: np.ndarray,
+    head: np.ndarray,
+    first: int,
+    full: int,
+    draws: int = DRAWS,
+    null: bool = False,
 ) -> dict[str, Any]:
     """Run the gate on `draws` random sets of cases: at two sizes, staged, and naively.
 
@@ -208,14 +213,23 @@ def replay(
     population in which the variant's effect is exactly the one measured on all cases.
     Subsets drawn without replacement would each resemble the whole set too closely,
     which shrinks the spread between draws and flatters the gate.
+
+    With `null`, the two sides of every drawn case are swapped at random. The cases
+    change exactly as often as they really did, but in neither direction more than the
+    other: a change of this variant's size that has no effect at all. Any REGRESSED or
+    IMPROVED verdict is then a false alarm.
     """
     rng = np.random.default_rng(0)  # every variant sees the same draws
+    coin = np.random.default_rng(1)
     tally: dict[str, Counter[str]] = {d: Counter() for d in ("first", "full", "staged")}
     naive: Counter[str] = Counter()
     used = early = settled = 0
     for i in range(draws):
         pick = rng.integers(0, len(base), full)
         b, h = base[pick], head[pick]
+        if null:
+            swap = coin.random(full) < 0.5
+            b, h = np.where(swap, h, b), np.where(swap, b, h)
         tally["first"][decide(b[:first], h[:first], ALPHA, i)] += 1
         tally["full"][decide(b, h, ALPHA, i)] += 1
         # Staged: half the error budget on the first cases, the other half on all of them.
@@ -285,6 +299,8 @@ def expected(delta: float, changed: float, n: int) -> float:
 def work(job: tuple[Key, np.ndarray, np.ndarray, int, int, dict[str, np.ndarray] | None]) -> Any:
     key, base, head, first, full, tags = job
     result = {"truth": truth(base, head), **replay(base, head, first, full)}
+    if result["truth"]["kind"] in (BEYOND, INSIDE, NO_DROP):
+        result["null"] = replay(base, head, first, full, null=True)
     if tags and result["truth"]["kind"] in (INSIDE, NO_DROP):
         result["slices"] = slice_alarms(base, head, tags, full)
     return key, result
@@ -348,7 +364,7 @@ def shares(result: dict[str, Any], design: str) -> str:
     text = f"{pct(s['REGRESSED'])} / {pct(s['INCONCLUSIVE'])} / {pct(passed(result, design))}"
     # A variant near the unscored limit is invalid in some draws only: say so, or the
     # three shares would quietly fail to add up.
-    return text + (f", `INVALID` {pct(s['INVALID'])}" if s["INVALID"] else "")
+    return text + (f", `INVALID` {pct(s['INVALID'])}" if s["INVALID"] >= 0.005 else "")
 
 
 def mean(values: Any) -> float:
@@ -440,28 +456,27 @@ def task_report(task: zoo.Task, data: dict[str, Any], results: dict[Key, Any]) -
             rows,
         )
 
+        nulls = [r["null"] for r in main.values() if "null" in r]
+        checks = (
+            ("A change with no effect is called `REGRESSED`", nulls, ("REGRESSED",)),
+            ("A change with no effect is called `IMPROVED`", nulls, ("IMPROVED",)),
+            ("A drop beyond the margin is let through", group(BEYOND), ("PASS", "IMPROVED")),
+        )
         rows = []
-        for kind, label, verdicts in (
-            (NO_DROP, "A change with no drop is called `REGRESSED`", ("REGRESSED",)),
-            (BEYOND, "A drop beyond the margin is let through", ("PASS", "IMPROVED")),
-        ):
-            if group(kind):
-                rows.append(
-                    [
-                        label,
-                        str(len(group(kind))),
-                        *(
-                            pct(max(sum(r[d][v] for v in verdicts) for r in group(kind)))
-                            for d, _ in designs
-                        ),
-                    ]
-                )
+        for label, among, verdicts in checks:
+            if among:
+                rates = [[sum(r[d][v] for v in verdicts) for r in among] for d, _ in designs]
+                cells = [f"{pct(mean(x))} (worst {pct(max(x))})" for x in rates]
+                rows.append([label, str(len(among)), *cells])
         if rows:
             text += (
-                "\nThe two promises the gate makes, each checked on the variant that tests it "
-                f"hardest (the limit for both is alpha, {ALPHA:.0%}):\n\n"
+                f"\nThe two errors that alpha ({ALPHA:.0%}) is meant to bound, as the mean over "
+                "the variants and the worst of them. A false alarm is counted on every variant "
+                "with the two sides of each case swapped at random: answers change as often "
+                "as they really did, but in no direction. A miss is counted on the variants "
+                "that really fell beyond the margin.\n\n"
             )
-            text += table(["Error", "Variants", *(f"Worst, {label}" for _, label in designs)], rows)
+            text += table(["Error", "Variants", *(label for _, label in designs)], rows)
 
         text += "\nOn average, by what the change really did (each variant counts once):\n\n"
         rows = []
@@ -773,7 +788,8 @@ def report(data: dict[str, Any], results: dict[Key, Any]) -> str:
         f"- Scores extracted on {data['date']} at commit `{data['commit']}`.\n"
     )
     for t in data["tasks"].values():
-        text += f"- `{t['dataset']}`: {t['cases']:,} cases, version `{t['version']}`, {len(t['variants']) - 1} variants.\n"
+        if t["variants"]:  # a task whose baseline has not run yet has nothing to report
+            text += f"- `{t['dataset']}`: {t['cases']:,} cases, version `{t['version']}`, {len(t['variants']) - 1} variants.\n"
     text += "- Models: " + "; ".join(f"`{model}` ({digest})" for model, digest in models) + ".\n"
     text += (
         f"- Gate settings: margin {MARGIN}, alpha {ALPHA}, at most {ERROR_RATE_MAX:.0%} of cases "

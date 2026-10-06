@@ -67,6 +67,13 @@ def test_no_drop_is_rarely_called_a_regression():
     assert result["naive"]["700:any"] > 0.3  # a bare comparison blocks on noise
 
 
+def test_swapping_sides_at_random_turns_any_change_into_one_with_no_effect():
+    base, head = outcomes(drop=0.15)
+    null = proof.replay(base, head, 250, 700, draws=150, null=True)
+    assert null["full"]["REGRESSED"] <= 0.12 and null["full"]["IMPROVED"] <= 0.12
+    assert proof.replay(base, head, 250, 700, draws=20)["full"]["REGRESSED"] > 0.9  # unlike this
+
+
 def test_identical_scores_always_pass():
     base, _ = outcomes()
     assert proof.truth(base, base)["kind"] == proof.IDENTICAL
