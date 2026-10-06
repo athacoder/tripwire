@@ -18,7 +18,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-      - run: pip install -e ".[dev]"
+      # The dashboard is an optional extra; it is installed here so that its tests run.
+      - run: pip install -e ".[dev,dashboard]"
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy

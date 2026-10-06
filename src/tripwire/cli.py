@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import io
 import json
 import sqlite3
+import subprocess
 import sys
 import time
 from collections.abc import Coroutine, Iterator
@@ -991,3 +993,22 @@ def usage(
             f"({share:.0%} of calls avoided)"
         )
 
+
+@app.command()
+def dashboard(
+    read_only: Annotated[
+        bool, typer.Option(help="Switch the labelling page off, as for a public demo.")
+    ] = False,
+    port: Annotated[int, typer.Option(help="Port to serve on.")] = 8501,
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Explore results in the browser: history, comparisons, flips, speed, judge, power."""
+    _load(config)  # a broken config should fail here, not inside the page
+    if importlib.util.find_spec("streamlit") is None:
+        message = 'the dashboard needs Streamlit: pip install "tripwire-eval[dashboard]"'
+        typer.secho(f"error: {message}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2)
+    page = Path(__file__).with_name("dashboard.py")
+    command = [sys.executable, "-m", "streamlit", "run", str(page), "--server.port", str(port)]
+    command += ["--", str(config.resolve()), *(["--read-only"] if read_only else [])]
+    raise typer.Exit(subprocess.run(command, check=False).returncode)

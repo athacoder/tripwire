@@ -19,6 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dashboard = ["streamlit>=1.50"]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "scipy-stubs"]
 
 [project.scripts]
@@ -45,3 +46,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 files = ["src"]
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]  # the dashboard's libraries are an optional extra
+module = ["streamlit.*", "altair.*"]
+ignore_missing_imports = true
