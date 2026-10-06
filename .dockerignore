@@ -1,0 +1,6 @@
+# The image needs the package and nothing else; a project is mounted at run time.
+*
+!pyproject.toml
+!README.md
+!src
+src/**/__pycache__
