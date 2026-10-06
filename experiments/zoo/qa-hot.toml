@@ -1,0 +1,8 @@
+kind = "prompt"
+provider = "local"
+system = "../prompts/policy_qa/system.md"
+template = "../prompts/policy_qa/user.md"
+model = "gemma3:4b"
+temperature = 1.5
+num_ctx = 2048
+max_tokens = 120

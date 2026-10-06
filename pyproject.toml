@@ -39,6 +39,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*" = ["E501"]  # generator templates read better as one line each
+"experiments/*" = ["E501"]  # so do report tables and SVG elements
 
 [tool.mypy]
 python_version = "3.12"
