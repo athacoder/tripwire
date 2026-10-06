@@ -49,8 +49,9 @@ The 1,500-case reference split ran through it in 7.2 minutes.
 A queue is meant to run unattended, and a laptop set to sleep after fifteen idle minutes
 would end it early. On Windows the queue therefore asks the system not to sleep from
 idleness while it runs. The request changes no setting and ends with the process, and a
-closed lid still sleeps. On macOS start the queue under `caffeinate -i`, on Linux under
-`systemd-inhibit`.
+closed lid still sleeps. Keep the charger in as well: on battery this laptop went to sleep
+from idleness with the request in place. On macOS start the queue under `caffeinate -i`,
+on Linux under `systemd-inhibit`.
 
 To use another machine's GPU, point a provider's `base_url` at an Ollama server there.
 Nothing else changes: samples are keyed by the model's digest, not by where it ran.

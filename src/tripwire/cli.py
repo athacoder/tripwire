@@ -797,9 +797,9 @@ def _stay_awake() -> None:
     """Ask Windows not to sleep from idleness while this process runs.
 
     A queue is meant to run unattended, and a laptop that dozes off after fifteen idle
-    minutes ends it early. The request changes no setting and dies with the process; a
-    closed lid still sleeps. Elsewhere, start the queue under `caffeinate -i` (macOS) or
-    `systemd-inhibit` (Linux).
+    minutes ends it early. The request changes no setting and dies with the process. A
+    closed lid still sleeps, and on battery the request was seen not to hold. Elsewhere,
+    start the queue under `caffeinate -i` (macOS) or `systemd-inhibit` (Linux).
     """
     if sys.platform == "win32":
         import ctypes
