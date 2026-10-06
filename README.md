@@ -66,8 +66,8 @@ code 1. The method is described in [docs/methodology.md](docs/methodology.md).
 | LLM judge: versioned verdicts, probes with known answers, blind labelling, calibration | done |
 | Growing datasets: perturbations, model-drafted cases, TraceLens import, human review | done |
 | Two-stage gate, run queue, usage report | done |
+| Bisect, drift canary, HTML reports, dashboard | done |
 | Benchmark of the gate itself on seeded regressions | planned |
-| Dashboard | planned |
 
 ## Quick start
 
@@ -128,6 +128,9 @@ author's machine. That is fine for a solo project and worth knowing for a team.
 | `tripwire report SUITE` | Score with an interval, slices, variance split, lowest-scoring cases |
 | `tripwire compare BASE HEAD` | Paired comparison of two suites that share a dataset |
 | `tripwire gate SUITE --base REF` | Compares the working tree (or `--head REF`) against a git ref |
+| `tripwire bisect SUITE --good REF` | Finds the first commit at which the gate blocks a suite, without touching the working tree |
+| `tripwire canary SUITE` | Reruns a fixed subset afresh against a pinned earlier run: has the model moved underneath? |
+| `tripwire dashboard` | History, comparisons, flipped cases, speed against quality, judge, labelling and power, in the browser |
 | `tripwire power SUITE` | Cases needed for a given drop, by formula and by simulation |
 | `tripwire aa SUITE` | Compares a suite with itself to measure the false-alarm rate |
 | `tripwire queue [SUITES]` | Runs suites back to back, one model at a time, within a time budget |
@@ -144,7 +147,11 @@ author's machine. That is fine for a solo project and worth knowing for a team.
 | `tripwire dataset review CANDIDATES --into DATASET` | Approve, correct or reject candidates by hand |
 
 Suites live in `tripwire.toml`; each names a dataset, a target file, its scorers, the
-primary metric, the margin and optional guardrails.
+primary metric, the margin and optional guardrails. `report`, `compare`, `gate` and
+`canary` take `--out FILE`; a name ending in `.html` gets one self-contained page.
+
+What to do after a verdict (find the commit, check for drift, look at the answers) is in
+[docs/investigating.md](docs/investigating.md).
 
 ## How it works
 
