@@ -78,9 +78,17 @@ def offline_target(cfg: Config, name: str) -> Target:
     return Target(cfg.target(name), cfg.root, Provider(), _provider_kind(cfg, name))
 
 
-async def resolve(cfg: Config, name: str, provider: Provider | None = None) -> Target:
-    """Build a suite's target, asking the backend for the model digest it needs."""
+async def resolve(
+    cfg: Config, name: str, provider: Provider | None = None, variant: str = ""
+) -> Target:
+    """Build a suite's target, asking the backend for the model digest it needs.
+
+    `variant` salts the target: the same configuration under another fingerprint, so its
+    samples are generated afresh instead of read from the cache.
+    """
     tcfg, kind = cfg.target(name), _provider_kind(cfg, name)
+    if variant:
+        tcfg = tcfg.model_copy(update={"salt": tcfg.salt + variant})
     provider = provider or (make_provider(cfg.provider[tcfg.provider]) if kind else Provider())
     try:
         return Target(tcfg, cfg.root, provider, kind, await provider.digest(tcfg.model))
@@ -99,15 +107,20 @@ async def run_suite(
     dry_run: bool = False,
     provider: Provider | None = None,
     progress: Callable[[Summary], None] | None = None,
+    variant: str = "",
 ) -> Summary:
-    """`limit` keeps the first N cases, `only` the cases with the given hashes."""
+    """`limit` keeps the first N cases, `only` the cases with the given hashes.
+
+    `variant` runs the same target under a salt, so nothing comes from the cache; the run
+    is recorded as "<suite>@<variant>" to keep it apart from the suite's own runs.
+    """
     suite = cfg.get_suite(name)
     every_case = datasets.load(cfg.root / suite.dataset)
     version = datasets.version(every_case)  # the dataset's identity, whatever subset runs
     cases = [c for c in every_case[:limit] if only is None or c.hash in only]
     # A sample is keyed by its case, so a case listed twice is still one sample to make.
     cases = list({c.hash: c for c in cases}.values())
-    target = await resolve(cfg, name, provider)
+    target = await resolve(cfg, name, provider, variant)
     # Expected answers written by a model reward imitating that model. Scoring the same
     # model against them would flatter it, so that is refused outright.
     own = sum(
@@ -178,7 +191,7 @@ async def run_suite(
             [
                 {
                     "run_id": run_id,
-                    "suite": name,
+                    "suite": f"{name}@{variant}" if variant else name,
                     "dataset_version": s.dataset_version,
                     "fingerprint": fp,
                     "reps": suite.reps,

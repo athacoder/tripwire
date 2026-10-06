@@ -3,6 +3,9 @@
 Samples can travel as bundles, small files committed next to the code. A machine with the
 model generates them; CI, which has no GPU, re-checks the statistics from the bundles and
 never calls a model.
+
+The same comparison answers two more questions: which commit first made a suite worse
+(bisect), and whether the model's behaviour moved while the project stood still (canary).
 """
 
 from __future__ import annotations
@@ -13,9 +16,11 @@ import json
 import sqlite3
 import subprocess
 import tarfile
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from uuid import uuid4
 
 from . import __version__, datasets, store
 from .compare import blocked, compare
@@ -208,3 +213,137 @@ async def gate(
             return result, is_blocked
         finally:
             db.close()
+
+
+def _git(cfg: Config, *args: str) -> str:
+    done = subprocess.run(["git", *args], cwd=cfg.root, capture_output=True, text=True, check=False)
+    if done.returncode:
+        raise ValueError(f"git {args[0]} failed: {done.stderr.strip()}")
+    return done.stdout.strip()
+
+
+async def bisect(
+    cfg: Config,
+    name: str,
+    good: str,
+    bad: str = "HEAD",
+    provider: Provider | None = None,
+    report: Callable[[str], None] = lambda line: None,
+) -> dict[str, Any]:
+    """Find the first commit after `good` at which the gate blocks the suite.
+
+    Each probe is an ordinary gate run of one commit against `good`, read from git, so the
+    working tree is never touched. A commit the gate cannot decide (INCONCLUSIVE or
+    INVALID) cannot split the range, and its neighbours are tried instead. The sample
+    cache bounds the work: a commit that leaves the target alone costs nothing.
+    """
+    if good.startswith("-") or bad.startswith("-"):
+        raise ValueError("not a git ref")
+    commits = _git(cfg, "rev-list", "--first-parent", "--reverse", f"{good}..{bad}").split()
+    if not commits:
+        raise ValueError(f"there are no commits after {good} on the way to {bad}")
+    seen: dict[int, bool | None] = {}
+
+    async def blocked_at(i: int) -> bool | None:
+        if i not in seen:
+            result, is_blocked = await gate(cfg, name, good, commits[i], provider=provider)
+            decided = result["verdict"] not in ("INCONCLUSIVE", "INVALID")
+            seen[i] = is_blocked if decided else None
+            subject = _git(cfg, "log", "-1", "--format=%s", commits[i])
+            report(f"{commits[i][:10]}  {result['verdict']:<12}  {subject}")
+        return seen[i]
+
+    if not await blocked_at(len(commits) - 1):
+        raise ValueError(f"{bad} is not blocked against {good}, so there is nothing to find")
+    low, high = -1, len(commits) - 1  # commits[low] passes (-1 is `good`); commits[high] is blocked
+    while high - low > 1:
+        middle = (low + high) // 2
+        for probe in sorted(range(low + 1, high), key=lambda i: abs(i - middle)):
+            state = await blocked_at(probe)
+            if state is not None:
+                break
+        else:
+            break  # everything in between is undecided: the range cannot get narrower
+        low, high = (low, probe) if state else (probe, high)
+    return {
+        "first_bad": commits[high] if high - low == 1 else None,
+        "candidates": commits[low + 1 : high + 1],
+        "tested": len(seen),
+        "commits": len(commits),
+    }
+
+
+async def canary(
+    cfg: Config, name: str, size: int = 150, pin: bool = False, provider: Provider | None = None
+) -> tuple[dict[str, Any], bool]:
+    """Has the model's behaviour moved while nothing in the project changed?
+
+    Reruns a fixed subset of the cases under a fresh salt, so nothing comes from the
+    cache, and compares the answers with a pinned reference run of the same target. Seeds
+    come from the cases, so an unchanged runtime gives the same answers again. A
+    difference means something underneath moved: the runtime's version, the model behind
+    a tag, a driver.
+
+    The reference is pinned by fingerprint the first time, not looked up again: a model
+    pulled anew has a new digest, and the point is to compare against the old one.
+    """
+    suite = cfg.get_suite(name)
+    cases = datasets.load(cfg.root / suite.dataset)
+    subset = datasets.split(cases, {"canary": min(size, len(cases))}, seed=0)["canary"]
+    wanted, key = {c.hash for c in subset}, f"canary:{name}"
+    db = store.connect(cfg.db_path)
+
+    async def run(variant: str = "") -> str:
+        fingerprint = (
+            await run_suite(cfg, name, only=wanted, provider=provider, variant=variant)
+        ).fingerprint
+        score_suite(cfg, name, fingerprint, db)
+        if JUDGE in suite.scorers:
+            await judge_suite(cfg, name, fingerprint, db)
+        return fingerprint
+
+    def runtime(fingerprint: str) -> dict[str, Any]:
+        """What generated a fingerprint's samples: the environment of its first run."""
+        row = db.execute(
+            "SELECT env FROM runs WHERE fingerprint=? ORDER BY started_at", (fingerprint,)
+        ).fetchone()
+        return json.loads(row["env"]) if row else {}
+
+    def record(base: str, head: str, verdict: str, result: dict[str, Any], at: str) -> None:
+        row = {"suite": key, "base": base, "head": head, "verdict": verdict}
+        store.insert(db, "comparisons", [{**row, "result": json.dumps(result), "created_at": at}])
+
+    try:
+        pinned = db.execute(
+            "SELECT base, created_at FROM comparisons WHERE suite=? AND verdict='PINNED' "
+            "ORDER BY id DESC",
+            (key,),
+        ).fetchone()
+        if pinned is None or pin:
+            reference, since = await run(), now()
+            record(reference, reference, "PINNED", {"env": runtime(reference)}, since)
+        else:
+            reference, since = pinned["base"], pinned["created_at"]
+        # The salt has to be new every time, or a second canary in the same second would
+        # read the first one's samples back and report that nothing had changed.
+        fresh = await run(f"canary {now()} {uuid4().hex[:6]}")
+        result = compare(db, suite, subset, reference, fresh)
+        answers = [
+            {
+                r["case_hash"]: r["output"]
+                for r in db.execute(
+                    "SELECT case_hash, output FROM samples WHERE fingerprint=? AND rep=0", (fp,)
+                )
+            }
+            for fp in (reference, fresh)
+        ]
+        result.update(
+            subset=len(subset),
+            identical=sum(h in answers[0] and answers[0][h] == answers[1].get(h) for h in wanted),
+            pinned_at=since,
+            env={"reference": runtime(reference), "now": runtime(fresh)},
+        )
+        record(reference, fresh, result["verdict"], result, now())
+        return result, blocked(result, suite)
+    finally:
+        db.close()

@@ -19,8 +19,10 @@ import httpx
 import typer
 
 from . import __version__, datasets, generate, report, stats, store
-from .compare import blocked, compare, matrix, summarise
+from .compare import FLIPS_KEPT, blocked, compare, matrix, summarise
 from .config import Config, load_config
+from .gate import bisect as run_bisect
+from .gate import canary as run_canary
 from .gate import gate as run_gate
 from .judge import Judge, against_rule, calibration, judge_suite, probe
 from .models import Case
@@ -35,6 +37,10 @@ app.add_typer(dataset_app, name="dataset")
 app.add_typer(judge_app, name="judge")
 
 ConfigOpt = Annotated[Path, typer.Option("--config", "-c", help="Path to tripwire.toml.")]
+OutOpt = Annotated[
+    Path | None,
+    typer.Option(help="Also write the report to this file; a name ending in .html gets a page."),
+]
 DEFAULT_CONFIG = Path("tripwire.toml")
 EXIT = {"REGRESSED": 1, "INCONCLUSIVE": 2, "INVALID": 3}
 
@@ -153,15 +159,38 @@ def score(suite: str, config: ConfigOpt = DEFAULT_CONFIG) -> None:
     typer.echo(f"{written} scores written across {len(rows)} targets")
 
 
+def _write(out: Path | None, markdown: str, title: str) -> None:
+    """Save a report: as it is, or as one self-contained page when the name ends in .html."""
+    if out:
+        text = report.to_html(markdown, title) if out.suffix == ".html" else markdown
+        out.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _conclude(
+    label: str, result: dict[str, Any], is_blocked: bool, cfg: Config, out: Path | None
+) -> None:
+    """Print a comparison, save it if asked, and exit with the code a gate would give."""
+    text = report.comparison(label, result, is_blocked, cfg.tracelens_url)
+    # A page has room for every changed case that was kept, not only the first few.
+    every = (FLIPS_KEPT, FLIPS_KEPT)
+    page = out is not None and out.suffix == ".html"
+    full = report.comparison(label, result, is_blocked, cfg.tracelens_url, every) if page else text
+    _write(out, full, f"Tripwire: {result['verdict']} · {label}")
+    typer.echo(text)
+    raise typer.Exit(EXIT.get(result["verdict"], 1) if is_blocked else 0)
+
+
 @app.command("report")
-def report_cmd(suite: str, config: ConfigOpt = DEFAULT_CONFIG) -> None:
+def report_cmd(suite: str, out: OutOpt = None, config: ConfigOpt = DEFAULT_CONFIG) -> None:
     """Score, interval, slices and worst cases for one suite."""
     cfg = _load(config)
     db = store.connect(cfg.db_path)
     s, cases = _execute(_ready(cfg, suite, db))
     with _errors():
         summary = summarise(db, cfg.get_suite(suite), cases, s.fingerprint)
-    typer.echo(report.single(suite, s.fingerprint, summary))
+    text = report.single(suite, s.fingerprint, summary)
+    _write(out, text, f"Tripwire · {suite}")
+    typer.echo(text)
 
 
 @app.command("selfcheck")
@@ -181,7 +210,7 @@ def selfcheck_cmd(suite: str, config: ConfigOpt = DEFAULT_CONFIG) -> None:
 def compare_cmd(
     base: str,
     head: str,
-    out: Annotated[Path | None, typer.Option(help="Also write the report to this file.")] = None,
+    out: OutOpt = None,
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Compare two suites that share a dataset: BASE is the reference, HEAD the candidate."""
@@ -197,11 +226,7 @@ def compare_cmd(
         return result, blocked(result, suite)
 
     result, is_blocked = _execute(work())
-    text = report.comparison(f"{base} → {head}", result, is_blocked, cfg.tracelens_url)
-    if out:
-        out.write_text(text, encoding="utf-8", newline="\n")
-    typer.echo(text)
-    raise typer.Exit(EXIT.get(result["verdict"], 1) if is_blocked else 0)
+    _conclude(f"{base} → {head}", result, is_blocked, cfg, out)
 
 
 @app.command("gate")
@@ -215,7 +240,7 @@ def gate_cmd(
         bool, typer.Option(help="Use committed sample bundles; call no model. For CI.")
     ] = False,
     bundle: Annotated[bool, typer.Option(help="Write sample bundles to commit.")] = False,
-    out: Annotated[Path | None, typer.Option(help="Also write the report to this file.")] = None,
+    out: OutOpt = None,
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Block a change that makes a suite measurably worse than it is at BASE."""
@@ -223,11 +248,52 @@ def gate_cmd(
     result, is_blocked = _execute(
         run_gate(cfg, suite, base, head, verify_only=verify_only, bundle=bundle)
     )
-    text = report.comparison(suite, result, is_blocked, cfg.tracelens_url)
-    if out:
-        out.write_text(text, encoding="utf-8", newline="\n")
-    typer.echo(text)
-    raise typer.Exit(EXIT.get(result["verdict"], 1) if is_blocked else 0)
+    _conclude(suite, result, is_blocked, cfg, out)
+
+
+@app.command("bisect")
+def bisect_cmd(
+    suite: str,
+    good: Annotated[str, typer.Option(help="A git ref at which the suite was fine.")],
+    bad: Annotated[str, typer.Option(help="A git ref at which the gate blocks it.")] = "HEAD",
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Find the first commit at which the gate blocks a suite, testing as few as it can."""
+    cfg = _load(config)
+    found = _execute(run_bisect(cfg, suite, good, bad, report=typer.echo))
+    typer.echo(f"gated {found['tested']} of the {found['commits']} commits after {good}")
+    if found["first_bad"]:
+        typer.secho(f"first blocked commit: {found['first_bad']}", fg="red")
+        raise typer.Exit()
+    typer.echo("the gate could not decide the commits in between; the first blocked one is among:")
+    for commit in found["candidates"]:
+        typer.echo(f"  {commit}")
+    raise typer.Exit(2)
+
+
+@app.command("canary")
+def canary_cmd(
+    suite: str,
+    cases: Annotated[int, typer.Option(help="How many cases to run again.")] = 150,
+    pin: Annotated[
+        bool, typer.Option(help="Make the suite as it runs today the reference from now on.")
+    ] = False,
+    out: OutOpt = None,
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Run a fixed subset afresh and compare it with a pinned earlier run of the same target.
+
+    Nothing in the project has changed, so a difference means the model's behaviour moved
+    underneath it: after a runtime upgrade, a model pulled again, a new driver.
+    """
+    cfg = _load(config)
+    result, is_blocked = _execute(run_canary(cfg, suite, cases, pin))
+    then, today = (result["env"][k].get("ollama") or "unknown" for k in ("reference", "now"))
+    typer.echo(
+        f"{result['identical']} of {result['subset']} answers are identical to the reference "
+        f"pinned on {result['pinned_at'][:10]} (runtime then {then}, now {today})"
+    )
+    _conclude(f"canary · {suite}", result, is_blocked, cfg, out)
 
 
 @app.command()
@@ -924,3 +990,4 @@ def usage(
             f"cache: {cached} of {cached + generated} requested samples were already stored "
             f"({share:.0%} of calls avoided)"
         )
+

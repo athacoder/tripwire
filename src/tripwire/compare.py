@@ -15,6 +15,7 @@ from .models import Case
 from .scorers import primary
 
 MIN_SLICE = 30  # below this a slice says "insufficient data", never "fine"
+FLIPS_KEPT = 50  # changed cases kept with their outputs, per direction
 
 
 def case_scores(
@@ -259,8 +260,10 @@ def compare(
         "flaky": int(((base > 0) & (base < 1)).sum()),
         "stable_pass": int(((d == 0) & (base == 1)).sum()),
         "stable_fail": int(((d == 0) & (base == 0)).sum()),
-        "broke_examples": [detail(i) for i in order[:10] if d[i] < 0],
-        "fixed_examples": [detail(i) for i in order[::-1][:5] if d[i] > 0],
+        # More than a terminal should print: the Markdown report shows the first few, the
+        # HTML report all of these.
+        "broke_examples": [detail(i) for i in order[:FLIPS_KEPT] if d[i] < 0],
+        "fixed_examples": [detail(i) for i in order[::-1][:FLIPS_KEPT] if d[i] > 0],
     }
     return result
 

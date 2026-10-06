@@ -1,7 +1,12 @@
-"""Render results as Markdown: readable in a terminal and as a pull-request comment."""
+"""Render results as Markdown: readable in a terminal and as a pull-request comment.
+
+The same Markdown can be turned into one self-contained HTML page, for a CI artifact.
+"""
 
 from __future__ import annotations
 
+import html
+import re
 from typing import Any
 
 MEANING = {
@@ -31,8 +36,13 @@ def _trace(trace_id: str | None, base_url: str | None) -> str:
 
 
 def comparison(
-    suite: str, r: dict[str, Any], is_blocked: bool = False, trace_url: str | None = None
+    suite: str,
+    r: dict[str, Any],
+    is_blocked: bool = False,
+    trace_url: str | None = None,
+    shown: tuple[int, int] = (10, 5),
 ) -> str:
+    """`shown` caps how many broken and fixed cases are listed; the result holds more."""
     verdict = r["verdict"]
     parts = [
         f"## Tripwire: {verdict} · `{suite}`",
@@ -114,11 +124,14 @@ def comparison(
         f"### Flips\n\n{f['broke']} broke · {f['fixed']} fixed · {f['flaky']} flaky on base · "
         f"{f['stable_pass']} stable pass · {f['stable_fail']} stable fail"
     )
-    for title, key in (("Broke", "broke_examples"), ("Fixed", "fixed_examples")):
-        if f[key]:
+    for (title, key), limit in zip(
+        (("Broke", "broke_examples"), ("Fixed", "fixed_examples")), shown, strict=True
+    ):
+        examples = f[key][:limit]
+        if examples:
             # When the target reported a trace id, point at the stage-level diagnosis.
-            traced = any(e.get("trace_id") for e in f[key])
-            rows = [
+            traced = any(e.get("trace_id") for e in examples)
+            listed = [
                 [
                     _cell(e["text"]),
                     _cell(e["expected"]),
@@ -126,14 +139,84 @@ def comparison(
                     _cell(e["head_output"]),
                     *([_trace(e.get("trace_id"), trace_url)] if traced else []),
                 ]
-                for e in f[key]
+                for e in examples
             ]
             header = ["input", "expected", "base said", "head said", *(["trace"] if traced else [])]
             parts.append(
-                f"**{title}** (top {len(rows)} of {f[key.split('_')[0]]})\n\n"
-                + _table(header, rows)
+                f"**{title}** (top {len(listed)} of {f[key.split('_')[0]]})\n\n"
+                + _table(header, listed)
             )
     return "\n\n".join(parts) + "\n"
+
+
+PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+:root {{ color-scheme: light dark; --ink: #1c1c1a; --soft: #5b5a55; --line: #dddcd5;
+  --wash: #f1f0eb; --page: #fcfcfb; }}
+@media (prefers-color-scheme: dark) {{
+  :root {{ --ink: #f2f1ec; --soft: #b5b4ab; --line: #3a3a37; --wash: #2a2a28; --page: #1a1a19; }}
+}}
+body {{ font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink);
+  background: var(--page); max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }}
+h2 {{ font-size: 1.35rem; margin: 0 0 .5rem; }}
+h3 {{ font-size: 1.05rem; margin: 1.75rem 0 .5rem; }}
+p {{ margin: .5rem 0; }}
+table {{ display: block; overflow-x: auto; border-collapse: collapse; margin: .5rem 0 1rem;
+  font-size: 14px; }}
+th, td {{ text-align: left; padding: .35rem .6rem; border-bottom: 1px solid var(--line);
+  vertical-align: top; }}
+th {{ color: var(--soft); font-weight: 600; white-space: nowrap; }}
+code {{ background: var(--wash); padding: .1rem .3rem; border-radius: 3px; font-size: .92em; }}
+a {{ color: inherit; }}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>
+"""
+
+
+def _inline(text: str) -> str:
+    """Bold, code and links. Escaped first: cells quote model output, which is not trusted."""
+    text = html.escape(text)
+    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    return re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', text)
+
+
+def to_html(markdown: str, title: str) -> str:
+    """One self-contained page from a report written by this module.
+
+    It understands only what those reports use (headings, paragraphs, tables, bold, code,
+    links), and carries its styles with it, so the file works on its own as a CI artifact.
+    """
+    body = []
+    for block in markdown.strip().split("\n\n"):
+        lines = block.split("\n")
+        if lines[0].startswith("|"):
+            cells = [
+                [_inline(c.strip().replace("\\|", "|")) for c in re.split(r"(?<!\\)\|", line)[1:-1]]
+                for line in lines
+                if not set(line) <= set("|-")  # the rule under the header
+            ]
+            head = "".join(f"<th>{c}</th>" for c in cells[0])
+            rest = "".join(
+                "<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>" for row in cells[1:]
+            )
+            body.append(f"<table><thead><tr>{head}</tr></thead><tbody>{rest}</tbody></table>")
+        elif lines[0].startswith("#"):
+            level = len(lines[0]) - len(lines[0].lstrip("#"))
+            body.append(f"<h{level}>{_inline(lines[0].lstrip('# '))}</h{level}>")
+            body += [f"<p>{_inline(line)}</p>" for line in lines[1:]]
+        else:
+            body.append("<p>" + "<br>".join(_inline(line) for line in lines) + "</p>")
+    return PAGE.format(title=html.escape(title), body="\n".join(body))
 
 
 def single(suite: str, fingerprint: str, s: dict[str, Any]) -> str:

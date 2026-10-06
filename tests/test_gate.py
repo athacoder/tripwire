@@ -4,12 +4,13 @@ import subprocess
 import pytest
 from typer.testing import CliRunner
 
-from tripwire import store
+from tripwire import report, store
 from tripwire.cli import app
 from tripwire.compare import blocked, compare
 from tripwire.config import SuiteCfg
-from tripwire.gate import gate
+from tripwire.gate import bisect, canary, gate
 from tripwire.models import Case
+from tripwire.providers import Mock, Response
 
 
 def git(root, *args):
@@ -184,4 +185,115 @@ def test_a_collapsed_slice_is_flagged(tmp_path):
     result = compare(db, suite, CASES, "base", "head")
     flagged = {s["tag"]: s["regressed"] for s in result["slices"]}
     assert flagged == {"half:a": True, "half:b": False}
-    assert result["flips"]["broke"] == 30 and len(result["flips"]["broke_examples"]) == 10
+    assert result["flips"]["broke"] == 30 and len(result["flips"]["broke_examples"]) == 30
+    # The terminal report lists the first ten; a page has room for all of them.
+    assert "(top 10 of 30)" in report.comparison("demo", result)
+    page = report.to_html(report.comparison("demo", result, shown=(50, 50)), "demo")
+    assert "(top 30 of 30)" in page and page.count("<tr>") > 30 and "<table>" in page
+
+
+def test_a_page_never_runs_what_a_model_wrote():
+    said = '<script>alert(1)</script> [x](http://a"onmouseover="alert(2)) | `code`'
+    flips = {
+        "broke": 1, "fixed": 0, "flaky": 0, "stable_pass": 0, "stable_fail": 0,
+        "fixed_examples": [],
+        "broke_examples": [
+            {"text": "q", "expected": "a", "base_output": "a", "head_output": said, "delta": -1.0}
+        ],
+    }  # fmt: skip
+    result = {
+        "verdict": "REGRESSED", "metric": "exact.pass", "alpha": 0.05, "margin": 0.03,
+        "base": 1.0, "head": 0.0, "delta": -1.0, "lo": -1.0, "hi": -1.0, "p": 0.01,
+        "paired": 1, "cases": 1, "slices": [], "guardrails": [], "flips": flips,
+    }  # fmt: skip
+    page = report.to_html(report.comparison("demo", result), "a <title>")
+    assert "<script>" not in page and "&lt;script&gt;" in page
+    assert 'onmouseover="' not in page and "<title>a &lt;title&gt;</title>" in page
+    last_row = page.rsplit("<tr>", 1)[1]
+    assert "<code>code</code>" in last_row and last_row.count("<td>") == 4  # the pipe is text
+
+
+def commit(root, path, text, message):
+    (root / path).write_text(text)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", message)
+    done = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True)
+    return done.stdout.strip()
+
+
+WEAK = 'provider = "mock"\nmodel = "mock:0.4"\n'
+
+
+def test_bisect_finds_the_commit_that_broke_the_suite(repo):
+    good = commit(repo.root, "notes.md", "start", "notes")
+    shas = [
+        commit(repo.root, "notes.md", "more", "unrelated change"),
+        commit(
+            repo.root, "target.toml", 'provider = "mock"\nmodel = "mock:0.8"\nsalt = "a"\n', "x"
+        ),
+        commit(repo.root, "target.toml", WEAK, "weaker model"),  # the one to find
+        commit(repo.root, "notes.md", "even more", "unrelated again"),
+        commit(repo.root, "target.toml", WEAK + 'salt = "b"\n', "same answers"),
+    ]
+    lines = []
+    found = asyncio.run(bisect(repo, "demo", good, report=lines.append))
+    assert found["first_bad"] == shas[2] and found["candidates"] == [shas[2]]
+    assert found["commits"] == 5 and found["tested"] < 5 and len(lines) == found["tested"]
+    assert any("REGRESSED" in line and "weaker model" in line for line in lines)
+    assert (repo.root / "notes.md").read_text() == "even more"  # the working tree was left alone
+
+    with pytest.raises(ValueError, match="nothing to find"):
+        asyncio.run(bisect(repo, "demo", good, shas[1]))
+    cli, config = CliRunner(), ["--config", str(repo.root / "tripwire.toml")]
+    shown = cli.invoke(app, ["bisect", "demo", "--good", good, *config])
+    assert shown.exit_code == 0 and f"first blocked commit: {shas[2]}" in shown.output
+
+
+def test_bisect_says_so_when_the_gate_cannot_decide_a_commit(repo):
+    good = commit(repo.root, "notes.md", "start", "notes")
+    unclear = commit(repo.root, "target.toml", 'provider = "mock"\nmodel = "mock:0.74"\n', "?")
+    bad = commit(repo.root, "target.toml", WEAK, "weaker model")
+    found = asyncio.run(bisect(repo, "demo", good))
+    assert found["first_bad"] is None and found["candidates"] == [unclear, bad]
+
+
+class Wrong(Mock):
+    """The same model name, different behaviour: what a changed runtime looks like."""
+
+    async def complete(self, r):
+        return Response("wrong", r.model)
+
+
+class Repulled(Mock):
+    async def digest(self, model):
+        return "a new digest"
+
+
+def test_the_canary_compares_a_fresh_run_with_a_pinned_one(project):
+    def rows():
+        db = store.connect(project.db_path)
+        found = db.execute("SELECT base, head, verdict FROM comparisons ORDER BY id").fetchall()
+        return [tuple(r) for r in found]
+
+    result, is_blocked = asyncio.run(canary(project, "demo", size=12))
+    assert (result["identical"], result["subset"], result["verdict"]) == (12, 12, "PASS")
+    assert not is_blocked and samples(project) == 48  # 12 cases x 2 reps, pinned and fresh
+    (pinned, _, first), (base, fresh, verdict) = rows()
+    assert (first, verdict) == ("PINNED", "PASS") and base == pinned != fresh
+
+    # Something underneath changed: same configuration, different answers.
+    result, is_blocked = asyncio.run(canary(project, "demo", size=12, provider=Wrong()))
+    assert result["verdict"] == "REGRESSED" and is_blocked and result["identical"] < 12
+    assert rows()[-1][0] == pinned  # still measured against the first reference
+
+    # A model pulled again has a new digest; the reference must stay the old one.
+    asyncio.run(canary(project, "demo", size=12, provider=Repulled()))
+    assert rows()[-1][0] == pinned and rows()[-1][2] == "PASS"
+    asyncio.run(canary(project, "demo", size=12, pin=True, provider=Repulled()))
+    assert rows()[-2][2] == "PINNED" and rows()[-1][0] == rows()[-2][0] != pinned
+
+    cli, config = CliRunner(), ["--config", str(project.root / "tripwire.toml")]
+    out = project.root / "canary.html"
+    shown = cli.invoke(app, ["canary", "demo", "--cases", "12", "--out", str(out), *config])
+    assert shown.exit_code == 0 and "12 of 12 answers are identical" in shown.output
+    assert out.read_text(encoding="utf-8").startswith("<!doctype html>")
