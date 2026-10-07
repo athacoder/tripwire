@@ -54,6 +54,34 @@ chose in advance*. With too little data the answer is `INCONCLUSIVE`, never a si
 A guardrail over its limit or a slice that regressed significantly also blocks, with exit
 code 1. The method is described in [docs/methodology.md](docs/methodology.md).
 
+## How good is the gate?
+
+A gate that blocks merges has to be tested itself. Twenty-eight deliberate changes to the
+Banking77 setup (edits meant to hurt, edits meant to change nothing, two other models)
+were each run on 1,500 cases to get their real effect, and the gate was then replayed a
+thousand times per change on random draws of those cases.
+
+![How often the gate says REGRESSED, by the true size of the change](experiments/reports/dose_response.svg)
+
+| Margin 3 points, alpha 5% | 250 cases | 700 cases | Staged 250 → 700 |
+|---|---|---|---|
+| Drop beyond the margin (7 changes): called `REGRESSED` | 89% | 99% | 98% |
+| The same: let through | 1% | 0% | 1% |
+| No effect (27 changes, sides swapped at random): called `REGRESSED` | 4% | 3% | 4% |
+| No drop (10 changes): passed | 78% | 95% | 93% |
+
+- The staged gate ran 38 to 55% fewer cases than one look at 700.
+- A plain threshold on the same draws: "any drop" blocked 23 to 26% of the changes that
+  did nothing; "a drop over the margin" let through 6 to 8% of the real regressions.
+- Shuffling the label list, meant to be harmless, raised accuracy by 3.1 points. A prompt
+  too long for its context window lost 26.4 points with no error from the runtime, and
+  was called `REGRESSED` in over 99% of gates.
+
+The method, the limits and what stopping early costs are in
+[docs/benchmark.md](docs/benchmark.md); every table is in
+[experiments/reports/proof.md](experiments/reports/proof.md) and regenerates with
+`python experiments/proof.py`.
+
 ## Status
 
 | Piece | State |
@@ -67,7 +95,7 @@ code 1. The method is described in [docs/methodology.md](docs/methodology.md).
 | Growing datasets: perturbations, model-drafted cases, TraceLens import, human review | done |
 | Two-stage gate, run queue, usage report | done |
 | Bisect, drift canary, HTML reports, dashboard | done |
-| Benchmark of the gate itself on seeded regressions | planned |
+| Benchmark of the gate itself on seeded regressions | done |
 
 ## Quick start
 
@@ -195,8 +223,7 @@ RTX 3050 laptop GPU (6 GB), `gemma3:4b`, Banking77 gate split (700 cases).
 | Two-stage gate | a whitespace-only prompt edit passed on 250 of 700 cases |
 | Prompt layout | sharing the prompt prefix between cases makes a run 2.7 times faster |
 
-These describe one model on one dataset. A benchmark of the gate across many seeded
-changes is planned and is the number that will matter. Throughput and the two-stage
+These describe one model on one dataset. Throughput and the two-stage
 gate are covered in [docs/running-at-scale.md](docs/running-at-scale.md).
 
 ## Judged metrics
@@ -274,8 +301,9 @@ prompts/        system and user prompts, versioned in git
 targets/        one file per system under test
 scripts/        dataset importers and generators
 tests/          run on a deterministic mock provider
-docs/           methodology, the judge, growing datasets, running at scale,
-                design notes
+experiments/    the benchmark of the gate: its variants, the replay, the reports
+docs/           methodology, the benchmark, the judge, growing datasets, running at
+                scale, investigating, design notes
 ```
 
 ## License

@@ -55,6 +55,22 @@ using the ordinary comparator.
 - **It compares with a fixed point, not with yesterday.** Day-to-day comparison lets slow
   drift through one small step at a time.
 
+On the reference machine the reference was pinned from answers generated under Ollama
+0.35.0, and the canary was run twice the next day under 0.35.1:
+
+```text
+140 of 150 answers are identical to the reference pinned on 2026-10-06 (runtime then 0.35.0, now 0.35.1)
+Tripwire: PASS · canary · banking-intent
+exact.pass   base 0.587   head 0.580   Δ -0.007   [-0.027, +0.000]
+1 broke · 0 fixed · 87 stable pass · 62 stable fail
+```
+
+Ten answers changed and one of them changed a score: a real difference, and well inside
+the margin. The two runs agreed with each other on all 150 answers, so the difference lies
+between the reference and today, not in the sampling. One upgrade is one observation, and
+it cannot be told apart from anything else that changed on the machine between the two
+days.
+
 Run it after anything that could have moved the model. Each run is stored, and the
 dashboard's Drift page plots them.
 
