@@ -543,7 +543,7 @@ def task_report(task: zoo.Task, data: dict[str, Any], results: dict[Key, Any]) -
                         pct(mean(main[n]["early"] for n in names)),
                         f"{cases:.0f} of {full} ({pct(1 - cases / full)} fewer)",
                         f"{cases * seconds / 60:.1f} min, against {full * seconds / 60:.1f} min",
-                        pct(float(np.nanmean([main[n]["settled"] for n in names]))),
+                        pct(mean(s for n in names if not math.isnan(s := main[n]["settled"]))),
                         f"{pct(mean(main[n]['staged']['REGRESSED'] for n in names))}, against "
                         f"{pct(mean(main[n]['full']['REGRESSED'] for n in names))}",
                     ]
@@ -758,7 +758,7 @@ def figure(results: dict[Key, Any], data: dict[str, Any]) -> str:
     )
     if beyond:
         caught = min(min(p[3], p[4]) for p in beyond)
-        often = "every gate" if caught == 1 else f"at least {caught:.0%} of gates"
+        often = "every gate" if caught == 1 else f"at least {caught:.1%} of gates"
         out.append(
             f'<text x="{left}" y="446" fill="{muted}">Not shown: {len(beyond)} larger drops, down to {signed(min(p[1] for p in beyond))}, '
             f"each called REGRESSED in {often} at both sizes.</text>"
