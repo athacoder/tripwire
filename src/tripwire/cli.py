@@ -224,6 +224,8 @@ def compare_cmd(
         if b.dataset_version != h.dataset_version:
             raise ValueError("the two suites use different datasets; a paired comparison needs one")
         suite = cfg.get_suite(head)
+        # Both sides on the repetitions they both have, so swapping them negates the result.
+        suite = suite.model_copy(update={"reps": min(suite.reps, cfg.get_suite(base).reps)})
         result = compare(db, suite, head_cases, b.fingerprint, h.fingerprint)
         return result, blocked(result, suite)
 

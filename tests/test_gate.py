@@ -297,3 +297,21 @@ def test_the_canary_compares_a_fresh_run_with_a_pinned_one(project):
     shown = cli.invoke(app, ["canary", "demo", "--cases", "12", "--out", str(out), *config])
     assert shown.exit_code == 0 and "12 of 12 answers are identical" in shown.output
     assert out.read_text(encoding="utf-8").startswith("<!doctype html>")
+
+
+def test_swapping_the_sides_of_a_comparison_swaps_the_scores(project):
+    (project.root / "weak.toml").write_text(WEAK)
+    with (project.root / "tripwire.toml").open("a") as f:
+        f.write('[suite.once]\ndataset = "data.jsonl"\ntarget = "weak.toml"\n')  # 1 repetition
+    cli, config = CliRunner(), ["--config", str(project.root / "tripwire.toml")]
+
+    def scores(base, head):
+        shown = cli.invoke(app, ["compare", base, head, *config]).output
+        row = next(line for line in shown.splitlines() if line.startswith("| exact.pass"))
+        return [cell.strip() for cell in row.split("|")][2:4]
+
+    scores("demo", "once")  # generate; then make the second repetition differ from the first
+    db = store.connect(project.db_path)
+    db.execute("UPDATE scores SET value = 0 WHERE rep = 1")
+    db.commit()
+    assert scores("demo", "once") == scores("once", "demo")[::-1]
