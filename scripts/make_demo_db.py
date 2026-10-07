@@ -44,11 +44,13 @@ def main() -> None:
             runs = source.execute(
                 "SELECT * FROM runs WHERE suite=? OR suite LIKE ?", (name, f"{name}@%")
             ).fetchall()
-            for run in runs:
-                env = json.loads(run["env"])
-                kept = {k: env[k] for k in KEPT_ENV if k in env}
-                copy("runs", [{**dict(run), "env": json.dumps(kept)}])
             for fingerprint in {r["fingerprint"] for r in runs}:
+                # Every run of the target, under any suite name: when it first ran is what
+                # tells the dashboard which target is the original one.
+                for run in source.execute("SELECT * FROM runs WHERE fingerprint=?", (fingerprint,)):
+                    env = json.loads(run["env"])
+                    kept = {k: env[k] for k in KEPT_ENV if k in env}
+                    copy("runs", [{**dict(run), "env": json.dumps(kept)}])
                 copy(
                     "targets",
                     [
