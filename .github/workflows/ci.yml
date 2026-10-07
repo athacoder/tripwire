@@ -33,3 +33,21 @@ jobs:
           tripwire dataset lint datasets/policy_qa/qa.jsonl --prompts prompts/policy_qa
           tripwire selfcheck banking-intent
           tripwire selfcheck invoice-extract
+
+  # The dashboard's image: build it, mount the repository as the project, and check that
+  # the page is served. The results it shows are the packed copy of the benchmark's.
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t tripwire-dashboard .
+      - run: |
+          gunzip -c demo/tripwire-demo.db.gz > tripwire.db
+          docker run -d --name dashboard -p 8501:8501 -v "$PWD:/project" \
+            tripwire-dashboard --config experiments/zoo.toml
+          for attempt in $(seq 1 30); do
+            curl -fs http://localhost:8501/_stcore/health && break
+            sleep 2
+          done
+          docker logs dashboard
+          curl -fs http://localhost:8501/_stcore/health | grep -q ok
