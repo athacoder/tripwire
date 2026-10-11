@@ -319,14 +319,22 @@ async def canary(
             "ORDER BY id DESC",
             (key,),
         ).fetchone()
+
+        def salt() -> str:
+            # New every time, or a second canary in the same second would read the first
+            # one's samples back and report that nothing had changed.
+            return f"canary {now()} {uuid4().hex[:6]}"
+
         if pinned is None or pin:
-            reference, since = await run(), now()
+            # The reference is generated now, as this subset in this order, never read from
+            # the suite's stored samples. Those may predate whatever moved (a runtime
+            # upgrade leaves the digest, and so the cache, as it was), and they were
+            # generated among other cases, which alone changes some answers.
+            reference, since = await run(salt()), now()
             record(reference, reference, "PINNED", {"env": runtime(reference)}, since)
         else:
             reference, since = pinned["base"], pinned["created_at"]
-        # The salt has to be new every time, or a second canary in the same second would
-        # read the first one's samples back and report that nothing had changed.
-        fresh = await run(f"canary {now()} {uuid4().hex[:6]}")
+        fresh = await run(salt())
         result = compare(db, suite, subset, reference, fresh)
         answers = [
             {

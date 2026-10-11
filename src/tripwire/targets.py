@@ -21,6 +21,36 @@ def seed_for(case_hash: str, rep: int) -> int:
     return int(sha(f"{case_hash}:{rep}")[:8], 16)
 
 
+_checkouts: set[str] = set()  # roots that python targets were loaded from in this process
+
+
+def _enter_checkout(root: Path) -> None:
+    """Make `root` the one checkout that a python target's imports resolve to.
+
+    The gate loads the same application from two checkouts. Python caches imports by name,
+    so without this the second side would be handed the first side's helper modules and
+    both would run the same code. Other checkouts are taken off the import path and what
+    was imported from them is forgotten. Only modules found directly under a checkout
+    count: a virtual environment or a `src/` folder inside it is left alone.
+
+    ponytail: one checkout at a time. The gate runs its sides one after the other, so this
+    holds; running two checkouts concurrently in one process would need subprocesses.
+    """
+    here = str(root)
+    for other in _checkouts - {here}:
+        while other in sys.path:
+            sys.path.remove(other)
+        for key, module in list(sys.modules.items()):
+            origin, top = getattr(module, "__file__", None), key.partition(".")[0]
+            if not origin or not Path(origin).is_relative_to(other):
+                continue
+            if Path(origin).relative_to(other).parts[0] in (top, f"{top}.py"):
+                del sys.modules[key]
+    _checkouts.add(here)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+
+
 def _read(root: Path, rel: str | None) -> str:
     return (root / rel).read_text(encoding="utf-8") if rel else ""
 
@@ -51,7 +81,7 @@ class Target:
             if spec is None or spec.loader is None or not source.is_file():
                 raise ValueError(f"python target not found: {source}")
             loaded = importlib.util.module_from_spec(spec)
-            sys.path.insert(0, str(root))  # so the module's own imports resolve
+            _enter_checkout(root)  # so the module's own imports resolve, and to this root
             spec.loader.exec_module(loaded)
             self.fn = getattr(loaded, name)
         if cfg.kind == "http" and not cfg.url:

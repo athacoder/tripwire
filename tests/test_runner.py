@@ -298,3 +298,15 @@ def test_a_missing_or_broken_config_is_one_line_not_a_traceback(project):
     assert broken.exit_code == 2 and "error:" in broken.output
     lint = ["dataset", "lint", str(project.root / "data.jsonl"), "--prompts"]
     assert cli.invoke(app, [*lint, str(project.root / "no_such_folder")]).exit_code == 2
+
+
+def test_a_run_starts_from_a_freshly_loaded_model(project):
+    class Counting(Mock):
+        unloads = 0
+
+        async def unload(self, model):
+            Counting.unloads += 1
+
+    asyncio.run(run_suite(project, "demo", provider=Counting()))
+    asyncio.run(run_suite(project, "demo", provider=Counting()))  # all cached: no model needed
+    assert Counting.unloads == 1

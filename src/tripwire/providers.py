@@ -71,6 +71,10 @@ class Provider:
     async def info(self, model: str) -> dict[str, Any]:
         return {}
 
+    async def unload(self, model: str) -> None:
+        """Drop whatever state the backend keeps between requests, when it keeps any."""
+        return None
+
     async def aclose(self) -> None:
         return None
 
@@ -138,6 +142,9 @@ class Ollama(HttpProvider):
         if not found:
             raise ProviderError(f"model {model!r} is not pulled; run: ollama pull {model}")
         return found[0]
+
+    async def unload(self, model: str) -> None:
+        await self.call("POST", "/api/generate", {"model": model, "keep_alive": 0})
 
     async def info(self, model: str) -> dict[str, Any]:
         version = (await self.call("GET", "/api/version"))["version"]

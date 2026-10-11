@@ -315,3 +315,40 @@ def test_swapping_the_sides_of_a_comparison_swaps_the_scores(project):
     db.execute("UPDATE scores SET value = 0 WHERE rep = 1")
     db.commit()
     assert scores("demo", "once") == scores("once", "demo")[::-1]
+
+
+def test_a_python_target_sees_its_own_checkout_of_the_modules_it_imports(repo):
+    (repo.root / "app.py").write_text(
+        "import helper\n\ndef answer(case):\n    return helper.go(case)\n"
+    )
+    (repo.root / "helper.py").write_text(
+        "def go(case):\n    return 'answer ' + case['text'].split()[-1]\n"
+    )
+    set_target(repo, 'kind = "python"\nentry = "app:answer"\nwatch = ["*.py"]\n')
+    git(repo.root, "add", "-A")
+    git(repo.root, "commit", "-qm", "an app with a helper")
+    (repo.root / "helper.py").write_text("def go(case):\n    return 'broken'\n")  # only the helper
+    result, _ = run_gate(repo)
+    assert (result["base"], result["head"], result["verdict"]) == (1.0, 0.0, "REGRESSED")
+
+
+def test_pinning_the_canary_accepts_behaviour_that_changed_under_the_same_digest(project):
+    asyncio.run(canary(project, "demo", size=12))
+    assert asyncio.run(canary(project, "demo", size=12, provider=Wrong()))[1]  # blocked
+    asyncio.run(canary(project, "demo", size=12, pin=True, provider=Wrong()))
+    result, is_blocked = asyncio.run(canary(project, "demo", size=12, provider=Wrong()))
+    assert result["identical"] == 12 and not is_blocked
+
+
+def test_a_python_target_importing_inside_its_function_also_sees_its_own_checkout(repo):
+    lazy = "def answer(case):\n    import helper\n\n    return helper.go(case)\n"
+    (repo.root / "app.py").write_text(lazy)
+    (repo.root / "helper.py").write_text(
+        "def go(case):\n    return 'answer ' + case['text'].split()[-1]\n"
+    )
+    set_target(repo, 'kind = "python"\nentry = "app:answer"\nwatch = ["*.py"]\n')
+    git(repo.root, "add", "-A")
+    git(repo.root, "commit", "-qm", "an app that imports late")
+    (repo.root / "helper.py").write_text("def go(case):\n    return 'broken'\n")
+    result, _ = run_gate(repo)
+    assert (result["base"], result["head"], result["verdict"]) == (1.0, 0.0, "REGRESSED")

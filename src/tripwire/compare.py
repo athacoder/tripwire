@@ -143,7 +143,12 @@ def compare(
     """
     alpha = suite.alpha if alpha is None else alpha
     base_scores, head_scores = (case_scores(db, suite, fp) for fp in (base_fp, head_fp))
-    base_samples, head_samples = (_samples(db, fp, suite.reps) for fp in (base_fp, head_fp))
+    # Only the repetitions both sides have. One side's extra ones would make the result
+    # depend on which side is called the base.
+    reps = min(max(map(len, s.values()), default=0) for s in (base_scores, head_scores))
+    base_scores = {h: v[:reps] for h, v in base_scores.items()}
+    head_scores = {h: v[:reps] for h, v in head_scores.items()}
+    base_samples, head_samples = (_samples(db, fp, reps) for fp in (base_fp, head_fp))
     both = [c for c in cases if c.hash in base_scores and c.hash in head_scores]
     limits = suite.guardrails
     head_rows = [r for c in cases for r in head_samples.get(c.hash, [])]

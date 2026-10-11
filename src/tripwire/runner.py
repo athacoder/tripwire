@@ -203,6 +203,12 @@ async def run_suite(
             ],
         )
 
+        if todo:
+            # Start from a freshly loaded model. Ollama reuses the evaluated prefix of the
+            # previous request, and a run that begins on another prompt's leftovers gave
+            # different answers for the same seeds: 14 of 200 here, against none from a
+            # fresh load.
+            await target.provider.unload(model)
         deadline = math.inf if max_minutes is None else time.monotonic() + max_minutes * 60
         gate = asyncio.Semaphore(cfg.concurrency)
 
