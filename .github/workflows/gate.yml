@@ -34,16 +34,19 @@ jobs:
           cache: pip
       - run: pip install -e .
       - id: gate
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set +e
-          tripwire gate banking-intent --base "origin/${{ github.base_ref }}" --verify-only --out gate.md
+          tripwire gate banking-intent --base "origin/$BASE_REF" --verify-only --out gate.md
           echo "code=$?" >> "$GITHUB_OUTPUT"
           cat gate.md >> "$GITHUB_STEP_SUMMARY"
       - name: Comment on the pull request
         continue-on-error: true # forks get a read-only token; the job summary still has the report
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file gate.md --edit-last --create-if-none
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --body-file gate.md --edit-last --create-if-none
       - uses: actions/upload-artifact@v4
         with:
           name: gate-report
