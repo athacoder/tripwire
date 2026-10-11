@@ -204,6 +204,41 @@ truth the gate is checked against is known without error. See
 `experiments/proof.py` writes the dose-response figure as SVG text. Regenerating every
 table and the figure then needs nothing beyond the packages Tripwire already depends on.
 
+## Every run starts from a freshly loaded model
+
+Seeds were meant to make a run repeatable, and from the same starting point they do: 200
+cases generated again three days later gave the same 400 answers. But the benchmark's
+"identical configuration, new salt" variant differed from its baseline in 8.7% of answers
+(3.5% ignoring trailing whitespace). Ollama reuses the evaluated prefix of the previous
+request, and a run that begins on another prompt's leftovers does not compute the same
+numbers. Measured directly, 14 of 200 answers changed after five requests with another
+prompt, and none once the model was unloaded first. `run_suite` and the judge therefore
+unload the model before their first request whenever they have work to do. It costs a
+reload per run, a few seconds for a 4B model.
+
+What remains is the order of cases: the same 150 cases gave 148 identical answers when
+generated inside a run of all 700. So "reproducible" means the same cases in the same
+order from a fresh load, and the canary pins a reference generated exactly that way.
+
+Samples stored before this change were generated in whatever state the server was in.
+Nothing is regenerated: the effect is noise of about 2% of scores with no direction (the
+salt variant's Δ is −0.002), and a paired comparison treats it like any other rerun noise.
+
+## A comparison uses the repetitions both sides have
+
+Two suites can store different numbers of repetitions. Comparing one repetition on one
+side with the mean of two on the other gave a different difference depending on which
+side was called the base (+0.007 one way, −0.009 the other, on the same samples).
+`compare` now uses only the repetitions present on both sides.
+
+## A python target owns the import path while it runs
+
+The gate loads the same application from two checkouts in one process. Python caches
+imports by name, so the second checkout was handed the first one's helper modules: with
+only a helper changed, both sides ran the same code and the gate said `PASS`. Loading a
+python target now takes other checkouts off the import path and forgets what was imported
+from them. The gate runs its sides one after the other, so one owner at a time is enough.
+
 ## Not built yet
 
 

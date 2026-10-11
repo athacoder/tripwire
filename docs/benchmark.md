@@ -62,7 +62,7 @@ Banking77 on `gemma3:4b` (baseline 0.604 on 1,500 cases, margin 3 points, alpha 
 |---|---|---|---|
 | Drop beyond the margin (7 variants, 3.4 to 39.6 points): called `REGRESSED` | 89% | 99% | 98% |
 | The same: let through as `PASS` or `IMPROVED` | 1% (worst 4%) | 0% (worst 3%) | 1% (worst 3%) |
-| No effect (27 variants, sides swapped): called `REGRESSED` | 4% (worst 6%) | 3% (worst 6%) | 4% (worst 5%) |
+| No effect (27 comparisons, sides swapped): called `REGRESSED` | 4% (worst 6%) | 3% (worst 6%) | 4% (worst 5%) |
 | No drop (10 variants): passed | 78% | 95% | 93% |
 | Cases run per decision | 250 | 700 | 314 to 435 on average |
 
@@ -72,8 +72,12 @@ past the margin, all 16 examples mislabelled at −3.4 points, was caught 92% of
 700 cases and 57% at 250. A drop beyond the margin was let through in at most 4% of gates.
 
 **The false-alarm rate is where alpha says it should be.** With the direction taken out,
-`REGRESSED` came back in 3 to 4% of gates on average against a nominal 5%. The worst
-single variant reached 6%, which is within what a thousand draws can tell from 5%.
+`REGRESSED` came back in 3 to 4% of gates on average against a nominal 5%. `REGRESSED`
+also needs the interval to reach the margin, so the plainer test of the interval is the
+other direction: a change with no effect was called `IMPROVED` in 3 to 4% of gates. The
+worst single variant reached 6% either way, which is within what a thousand draws can
+tell from 5%. The 27 comparisons are the 26 variants that changed some score and could
+be scored, and the baseline's own second repetition.
 
 **Small drops are a grey zone by design.** Ten variants fell by less than the margin.
 `REGRESSED` means "confidently worse", not "worse than the margin", so a real 2.7-point
@@ -159,6 +163,15 @@ that check now covers the judge's prompts too.
   model said. That is the randomness a real gate has, since its samples are seeded and a
   fixed set of cases always gives the same answers, but it leaves out what a different
   seed would do. The second-repetition table is the check on this for a few variants.
+- **Each variant carries about 2% of noise from the server's state.** The variants were
+  generated one after another, and Ollama's reuse of the previous request's prefix made
+  the answers depend slightly on what ran before (see
+  [decisions.md](decisions.md#every-run-starts-from-a-freshly-loaded-model)). The
+  "identical configuration, new salt" variant is exactly that noise and nothing else: 1.9%
+  of scores changed, Δ −0.002. A variant's measured effect is therefore its edit plus
+  this, which matters only for the ones near zero; the halved context window (2.1% of
+  scores, Δ −0.006) cannot be told apart from it. Runs now start from a fresh load, which
+  removes it.
 - **The population is 1,500 cases.** Within the replay the truth is exact. How well those
   cases pin down each variant's effect on Banking77 at large is the interval in the first
   table, about ±1.5 points for most variants.

@@ -42,34 +42,53 @@ tripwire canary banking-intent --pin        # accept today's behaviour as the re
 ```
 
 The canary reruns a fixed, stratified subset of the suite under a fresh salt, so every
-answer is generated again, and compares it with a pinned earlier run of the same target
+answer is generated again, and compares it with a pinned earlier run of the same subset
 using the ordinary comparator.
 
-- **Seeds make the null exact.** Each case's seed is derived from the case, so an
-  unchanged runtime returns the same text. The canary reports how many answers are
-  identical before it reports any statistics, and with nothing changed that number is all
-  of them and the difference is exactly zero.
-- **The reference is pinned by fingerprint.** The first canary run fixes it. A model
-  pulled again has a new digest, hence a new fingerprint; looking the reference up afresh
-  would compare the new model with itself. The pinned run is the old model's.
+- **With nothing changed, every answer comes back the same.** Each case's seed is derived
+  from the case, every run starts from a freshly loaded model, and the reference is itself
+  a run of this subset in this order. The canary reports how many answers are identical
+  before it reports any statistics.
+- **The reference is generated when it is pinned, not read from the cache.** The first
+  canary run pins it; `--pin` pins it again. The suite's stored samples are not used:
+  they may be older than whatever moved, and they were generated among other cases.
+- **The reference is pinned by fingerprint.** A model pulled again has a new digest, hence
+  a new fingerprint; looking the reference up afresh would compare the new model with
+  itself. The pinned run is the old model's.
 - **It compares with a fixed point, not with yesterday.** Day-to-day comparison lets slow
   drift through one small step at a time.
 
-On the reference machine the reference was pinned from answers generated under Ollama
-0.35.0, and the canary was run twice the next day under 0.35.1:
+On the reference machine, pinned and run twice on the same runtime:
 
 ```text
-140 of 150 answers are identical to the reference pinned on 2026-10-06 (runtime then 0.35.0, now 0.35.1)
+150 of 150 answers are identical to the reference pinned on 2026-10-11 (runtime then 0.35.1, now 0.35.1)
 Tripwire: PASS · canary · banking-intent
-exact.pass   base 0.587   head 0.580   Δ -0.007   [-0.027, +0.000]
-1 broke · 0 fixed · 87 stable pass · 62 stable fail
+exact.pass   base 0.580   head 0.580   Δ +0.000   [+0.000, +0.000]
 ```
 
-Ten answers changed and one of them changed a score: a real difference, and well inside
-the margin. The two runs agreed with each other on all 150 answers, so the difference lies
-between the reference and today, not in the sampling. One upgrade is one observation, and
-it cannot be told apart from anything else that changed on the machine between the two
-days.
+### What it takes for a rerun to be identical
+
+Less obvious than "the same seed", and measured on `gemma3:4b` under Ollama 0.35.1:
+
+| Rerun of stored answers | Identical |
+|---|---|
+| Same cases, same order, freshly loaded model, three days later | 400 of 400 |
+| The 150 canary cases alone, freshly loaded, seven runs over five days | 150 of 150 each time |
+| The same 150 cases generated inside a run of all 700 | 148 of 150 |
+| 200 cases straight after five requests with another prompt, no fresh load | 186 of 200 |
+| The same, with the fresh load every run now makes | 200 of 200 |
+
+Ollama keeps the evaluated prefix of the previous request and reuses what the next prompt
+shares with it, so an answer depends a little on what the server did just before. Most of
+the changed answers differ only in a trailing newline; fewer than half change the label.
+Every run therefore unloads the model before its first request (`keep_alive: 0`). That is
+only possible through Ollama's own API: a target on an OpenAI-compatible server starts
+from whatever that server last did.
+
+An earlier version of the canary read its reference from the suite's stored samples, and
+reported 140 of 150 identical answers against ones generated under Ollama 0.35.0. That
+cannot be credited to the upgrade: those samples were generated before runs started from
+a fresh load, and among other cases, and either alone moves that many answers.
 
 Run it after anything that could have moved the model. Each run is stored, and the
 dashboard's Drift page plots them.

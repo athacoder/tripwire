@@ -67,7 +67,7 @@ thousand times per change on random draws of those cases.
 |---|---|---|---|
 | Drop beyond the margin (7 changes): called `REGRESSED` | 89% | 99% | 98% |
 | The same: let through | 1% | 0% | 1% |
-| No effect (27 changes, sides swapped at random): called `REGRESSED` | 4% | 3% | 4% |
+| No effect (27 comparisons, sides swapped at random): called `REGRESSED` | 4% | 3% | 4% |
 | No drop (10 changes): passed | 78% | 95% | 93% |
 
 - The staged gate ran 38 to 55% fewer cases than one look at 700.
