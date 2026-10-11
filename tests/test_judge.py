@@ -249,6 +249,19 @@ def test_calibration_against_human_labels(qa):
     assert result["n"] == 20 and result["agreement"] == 0.8
     assert result["human_lo"] < result["human_estimate"] < result["human_hi"]
 
+    # A second person who agrees with the judge every time must not be blended in.
+    for row in verdicts[:20]:
+        label = {
+            "fingerprint": s.fingerprint, "case_hash": row["case_hash"], "rep": row["rep"],
+            "criterion": "correct", "value": int(row["value"]),
+            "labeller": "u", "created_at": "now",
+        }  # fmt: skip
+        store.insert(db, "human_labels", [label])
+    with pytest.raises(ValueError, match="several people"):
+        calibration(qa, "qa", s.fingerprint, db)
+    assert calibration(qa, "qa", s.fingerprint, db, "t")["correct"]["agreement"] == 0.8
+    assert calibration(qa, "qa", s.fingerprint, db, "u")["correct"]["agreement"] == 1.0
+
 
 def test_judge_verdicts_travel_in_bundles(qa):
     s = asyncio.run(run_suite(qa, "qa"))

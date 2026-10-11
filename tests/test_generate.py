@@ -280,3 +280,10 @@ def test_a_trace_id_from_the_target_reaches_the_report(repo):  # noqa: F811
     assert "| trace |" in text and "trace" not in report.comparison(
         "demo", {"verdict": "UNCHANGED"}
     )
+
+
+def test_seed_material_too_long_for_the_drafting_call_is_refused_before_any_call():
+    backend = Scripted([])
+    with pytest.raises(ValueError, match="shorten the seed file"):
+        asyncio.run(generate.draft(backend, "m", "m", make_cases(2), "seed " * 5000, 3, []))
+    assert not backend.requests

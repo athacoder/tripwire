@@ -224,8 +224,6 @@ def compare_cmd(
         if b.dataset_version != h.dataset_version:
             raise ValueError("the two suites use different datasets; a paired comparison needs one")
         suite = cfg.get_suite(head)
-        # Both sides on the repetitions they both have, so swapping them negates the result.
-        suite = suite.model_copy(update={"reps": min(suite.reps, cfg.get_suite(base).reps)})
         result = compare(db, suite, head_cases, b.fingerprint, h.fingerprint)
         return result, blocked(result, suite)
 
@@ -594,6 +592,9 @@ def judge_calibrate(
     criterion: Annotated[
         str, typer.Option(help="The judge criterion the rule matches.")
     ] = "correct",
+    labeller: Annotated[
+        str | None, typer.Option(help="Whose labels to use, when several people labelled.")
+    ] = None,
     config: ConfigOpt = DEFAULT_CONFIG,
 ) -> None:
     """Compare the judge's stored verdicts with human labels, and optionally with a rule."""
@@ -601,7 +602,7 @@ def judge_calibrate(
     db = store.connect(cfg.db_path)
     s, _ = _execute(_ready(cfg, suite, db))
     with _errors():
-        found = calibration(cfg, suite, s.fingerprint, db)
+        found = calibration(cfg, suite, s.fingerprint, db, labeller)
     for name, result in found.items():
         typer.secho(f"criterion: {name} (judge mean {result['judge_mean']})", bold=True)
         rows = _agreement_rows(result)

@@ -327,8 +327,16 @@ def judge_page() -> None:
     chosen = pick("Judged target", judged[::-1], "judged")
     suite, fingerprint = chosen["suite"], chosen["fingerprint"]
     st.subheader(f"Judge `{cfg.judge.model}` on {chosen['label']}")
+    people = [
+        r[0]
+        for r in db.execute(
+            "SELECT DISTINCT labeller FROM human_labels WHERE fingerprint=? ORDER BY 1",
+            (fingerprint,),
+        )
+    ]
+    labeller = st.sidebar.selectbox("Labeller", people) if len(people) > 1 else None
     rows = []
-    for criterion, found in calibration(cfg, suite, fingerprint, db).items():
+    for criterion, found in calibration(cfg, suite, fingerprint, db, labeller).items():
         row = {"criterion": criterion, "judge mean": found["judge_mean"], "labels": found["n"]}
         if found["n"] >= 2:
             row["agreement with labels"] = round(found["agreement"], 3)

@@ -120,3 +120,12 @@ def test_selfcheck_handles_structured_answers(project):
     project.suite["demo"].scorers = ["field_f1"]
     project.suite["demo"].primary_metric = "field_f1.f1"
     assert selfcheck(project, "demo")["ok"]
+
+
+def test_a_dash_between_numbers_is_not_a_minus_sign():
+    assert scorers.numeric("it takes 10-15 days", 15, {})["pass"] == 1
+    assert scorers.numeric("the balance is -15", -15, {})["pass"] == 1
+    assert scorers.numeric("ref F-602", 602, {})["pass"] == 1
+    covered = {"answerable": True, "value": 15}
+    assert scorers.fact("Between 10-15 days.", covered, {})["pass"] == 1
+    assert scorers.fact("It is -15 days.", covered, {})["pass"] == 0

@@ -19,7 +19,7 @@ from typing import Any
 
 from .datasets import _tokens
 from .models import Case, sha
-from .providers import HttpProvider, Provider, ProviderError, Request
+from .providers import HttpProvider, Provider, ProviderError, Request, context_needed
 
 DISTRACTORS = [
     "By the way, the weather has been lovely this week.",
@@ -189,6 +189,11 @@ async def draft(
         max_tokens=4000,
         format=schema,
     )
+    if context_needed(request) > request.num_ctx:
+        raise ValueError(
+            f"the seed material and examples need about {context_needed(request)} tokens, "
+            f"more than the {request.num_ctx} the drafting call allows; shorten the seed file"
+        )
     reply = await provider.complete(request)
     try:
         drafts = [

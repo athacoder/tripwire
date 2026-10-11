@@ -39,8 +39,13 @@ def _parse_json(output: str) -> Any:
     return None
 
 
+# A minus sign, but not the dash of a range or a reference: "10-15" holds 10 and 15, and
+# "F-602" holds 602.
+MINUS = r"(?:(?<![\w.])-)?"
+
+
 def _number(value: Any) -> float | None:
-    found = re.findall(r"-?\d[\d,]*\.?\d*(?:[eE]-?\d+)?", str(value))
+    found = re.findall(MINUS + r"\d[\d,]*\.?\d*(?:[eE]-?\d+)?", str(value))
     try:
         return float(found[-1].replace(",", "")) if found else None  # the last number is the answer
     except ValueError:
@@ -127,7 +132,7 @@ def fact(output: str, expected: Any, ctx: dict[str, Any]) -> dict[str, float]:
     """
     if not expected.get("answerable", True):
         return {"pass": float(ABSTAINS.search(output.replace("’", "'")) is not None)}
-    numbers = re.findall(r"-?\d[\d,]*\.?\d*", output)
+    numbers = re.findall(MINUS + r"\d[\d,]*\.?\d*", output)
     found = {float(n.replace(",", "").rstrip(".")) for n in numbers if n.strip(",.-")}
     return {"pass": float(float(expected["value"]) in found)}
 
@@ -138,11 +143,11 @@ SCORERS: dict[str, tuple[Scorer, str]] = {
     "exact": (exact, "1"),
     "contains": (contains, "1"),
     "regex": (regex, "1"),
-    "numeric": (numeric, "1"),
+    "numeric": (numeric, "2"),
     "json_valid": (json_valid, "1"),
-    "field_f1": (field_f1, "1"),
+    "field_f1": (field_f1, "2"),
     "token_f1": (token_f1, "1"),
-    "fact": (fact, "2"),
+    "fact": (fact, "3"),
 }
 
 

@@ -143,6 +143,7 @@ class Judge:
             except ProviderError as e:
                 if not e.retryable or attempt == self.cfg.retries:
                     return None
+                await asyncio.sleep(min(30.0, self.cfg.backoff * 2**attempt))  # as the runner
             except (ValueError, KeyError, TypeError, TimeoutError):
                 return None  # unusable or no reply: leave the sample unscored, never guess
         return None
@@ -197,6 +198,7 @@ async def judge_suite(
     deadline = None if max_minutes is None else time.monotonic() + max_minutes * 60
     try:
         digest = await provider.digest(judge.conf.model)
+        await provider.unload(judge.conf.model)  # the same fresh start the runner makes
         for row, criterion in todo:
             if deadline is not None and time.monotonic() >= deadline:
                 break
@@ -286,9 +288,22 @@ async def probe(
     return report
 
 
-def calibration(cfg: Config, name: str, fingerprint: str, db: sqlite3.Connection) -> dict[str, Any]:
-    """Compare stored judge verdicts with human labels, per criterion."""
+def calibration(
+    cfg: Config, name: str, fingerprint: str, db: sqlite3.Connection, labeller: str | None = None
+) -> dict[str, Any]:
+    """Compare stored judge verdicts with one person's labels, per criterion."""
     suite, judge = cfg.get_suite(name), Judge(cfg)
+    names = [
+        r[0]
+        for r in db.execute(
+            "SELECT DISTINCT labeller FROM human_labels WHERE fingerprint=? ORDER BY 1",
+            (fingerprint,),
+        )
+    ]
+    if labeller is None and len(names) > 1:
+        # Two people's labels in one table would overwrite each other case by case.
+        raise ValueError(f"labels from several people ({', '.join(names)}); pick one labeller")
+    labeller = labeller or (names[0] if names else "")
     out: dict[str, Any] = {}
     for criterion, version in judge.versions.items():
         verdicts = {
@@ -303,8 +318,8 @@ def calibration(cfg: Config, name: str, fingerprint: str, db: sqlite3.Connection
             (r["case_hash"], r["rep"]): r["value"]
             for r in db.execute(
                 "SELECT case_hash, rep, value FROM human_labels "
-                "WHERE fingerprint=? AND criterion=?",
-                (fingerprint, criterion),
+                "WHERE fingerprint=? AND criterion=? AND labeller=?",
+                (fingerprint, criterion, labeller),
             )
         }
         shared = sorted(set(verdicts) & set(human))
