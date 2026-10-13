@@ -1,0 +1,3 @@
+kind  = "python"
+entry = "my_app:answer"    # my_app.py next to tripwire.toml, function `answer`
+watch = ["my_app.py"]      # files whose contents change what the function returns

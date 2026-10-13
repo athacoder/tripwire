@@ -1,0 +1,4 @@
+provider = "mock"
+model    = "mock:0.8"   # the mock answers about 80% of cases correctly
+system   = "../prompts/banking_intent/system.md"
+template = "../prompts/banking_intent/user.md"

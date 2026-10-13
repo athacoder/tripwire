@@ -1,0 +1,38 @@
+# Every suite here runs on the built-in mock provider: no model, no GPU, no key.
+# The datasets and prompts are the real ones from this repository. To run a suite on a
+# real model, change `provider` and `model` in its target file (see ../targets/).
+
+# A classifier scored by exact match, and a deliberately weaker copy to compare it with.
+[suite.banking]
+dataset = "../datasets/banking77/dev.jsonl"
+target  = "targets/banking.toml"
+
+[suite.banking-worse]
+dataset = "../datasets/banking77/dev.jsonl"
+target  = "targets/banking_worse.toml"
+
+# Structured extraction with a continuous metric.
+[suite.invoices]
+dataset        = "../datasets/invoices/extract.jsonl"
+target         = "targets/invoices.toml"
+scorers        = ["field_f1"]
+primary_metric = "field_f1.f1"
+
+# Question answering scored by a judge, with a rule-based check beside it.
+[suite.policy-qa]
+dataset        = "../datasets/policy_qa/qa.jsonl"
+target         = "targets/policy_qa.toml"
+scorers        = ["fact", "judge"]
+primary_metric = "judge.correct"
+
+[judge]
+provider = "mock"
+model    = "mock:0.9"
+system   = "../prompts/judge/system.md"
+template = "../prompts/judge/user.md"
+rubric   = "../prompts/judge/rubric.toml"
+
+# Your own code as the system under test: a Python function, not a prompt.
+[suite.my-app]
+dataset = "../datasets/banking77/dev.jsonl"
+target  = "targets/my_app.toml"

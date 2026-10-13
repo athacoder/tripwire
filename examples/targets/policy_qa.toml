@@ -1,0 +1,6 @@
+provider   = "mock"
+model      = "mock:0.8"
+system     = "../prompts/policy_qa/system.md"
+template   = "../prompts/policy_qa/user.md"
+num_ctx    = 2048
+max_tokens = 120

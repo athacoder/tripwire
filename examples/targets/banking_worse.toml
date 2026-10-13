@@ -1,0 +1,4 @@
+provider = "mock"
+model    = "mock:0.7"
+system   = "../prompts/banking_intent/system.md"
+template = "../prompts/banking_intent/user.md"

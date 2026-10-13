@@ -1,0 +1,5 @@
+provider   = "mock"
+model      = "mock:0.8"
+system     = "../prompts/invoice_extract/system.md"
+num_ctx    = 2048
+max_tokens = 160

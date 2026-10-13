@@ -197,7 +197,9 @@ class Mock(Provider):
         rate = float(r.model.partition(":")[2] or 0.8)
         chance = min(1.0, max(0.0, (rate - _unit(r.user)) / 0.2 + 0.5))
         passed = _unit(f"{r.model}|{r.user}|{r.seed}") < chance
-        text = str(r.expected) if passed else "wrong"
+        # A structured expected answer comes back as JSON, as a model would write it.
+        right = r.expected if isinstance(r.expected, str) else json.dumps(r.expected)
+        text = right if passed else "wrong"
         if r.format:  # asked for a structured verdict: play the judge
             verdict = "yes" if passed else "no"
             text = json.dumps({"evidence": "mock", "reasoning": "mock", "verdict": verdict})
