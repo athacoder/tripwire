@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tripwire-eval"
-version = "0.1.0"
+version = "1.0.0"
 description = "A statistical regression gate for LLM systems."
 readme = "README.md"
 requires-python = ">=3.12"
