@@ -41,9 +41,9 @@ def main() -> None:
         for name, suite in cfg.suite.items():
             cases = datasets.load(cfg.root / suite.dataset)
             hashes = {c.hash for c in cases}
-            runs = source.execute(
-                "SELECT * FROM runs WHERE suite=? OR suite LIKE ?", (name, f"{name}@%")
-            ).fetchall()
+            # The suite's own runs. Salted reruns ("suite@variant") are experiments and
+            # canary runs: their answers are not part of the benchmark.
+            runs = source.execute("SELECT * FROM runs WHERE suite=?", (name,)).fetchall()
             for fingerprint in {r["fingerprint"] for r in runs}:
                 # Every run of the target, under any suite name: when it first ran is what
                 # tells the dashboard which target is the original one.
@@ -71,8 +71,18 @@ def main() -> None:
                 copy("scores", [dict(r) for r in scores if r["case_hash"] in hashes])
             stored = source.execute("SELECT * FROM cases").fetchall()
             copy("cases", [dict(r) for r in stored if r["case_hash"] in hashes])
-            drift = source.execute("SELECT * FROM comparisons WHERE suite=?", (f"canary:{name}",))
-            copy("comparisons", [dict(r) for r in drift])
+        # Canary runs, of any suite: the Drift page reads nothing but these rows. The
+        # runtime's version is the point of them; the rest of each environment is dropped.
+        for row in source.execute("SELECT * FROM comparisons WHERE suite LIKE 'canary:%'"):
+            result = json.loads(row["result"])
+            env = result.get("env", {})
+            if row["verdict"] == "PINNED":  # one environment; a comparison has one per side
+                result["env"] = {k: env[k] for k in KEPT_ENV if k in env}
+            else:
+                result["env"] = {
+                    side: {k: v[k] for k in KEPT_ENV if k in v} for side, v in env.items()
+                }
+            copy("comparisons", [{**dict(row), "result": json.dumps(result)}])
         demo.commit()
         demo.execute("VACUUM")
         demo.close()
