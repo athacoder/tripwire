@@ -58,13 +58,17 @@ using the ordinary comparator.
 - **It compares with a fixed point, not with yesterday.** Day-to-day comparison lets slow
   drift through one small step at a time.
 
-On the reference machine, pinned and run twice on the same runtime:
+On the reference machine the reference was pinned under Ollama 0.35.1. Two days later the
+runtime had been upgraded to 0.40.3, and nothing else in the project had changed:
 
 ```text
-150 of 150 answers are identical to the reference pinned on 2026-10-11 (runtime then 0.35.1, now 0.35.1)
+150 of 150 answers are identical to the reference pinned on 2026-10-11 (runtime then 0.35.1, now 0.40.3)
 Tripwire: PASS · canary · banking-intent
 exact.pass   base 0.580   head 0.580   Δ +0.000   [+0.000, +0.000]
 ```
+
+That upgrade did not move this model on this prompt. It is one upgrade; the point of the
+canary is that the next one is a one-minute check and not an assumption.
 
 ### What it takes for a rerun to be identical
 

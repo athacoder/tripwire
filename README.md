@@ -217,7 +217,6 @@ RTX 3050 laptop GPU (6 GB), `gemma3:4b`, Banking77 gate split (700 cases).
 | Where the variance is | 96% between cases, 4% within: add cases, not repetitions |
 | A/A false-alarm rate | 4.4% over 500 self-comparisons (nominal ceiling 10%) |
 | Few-shot examples removed | Δ −0.046 [−0.067, −0.024], `REGRESSED` |
-
 | Two-stage gate | a whitespace-only prompt edit passed on 250 of 700 cases |
 | Prompt layout | sharing the prompt prefix between cases makes a run 2.7 times faster |
 
