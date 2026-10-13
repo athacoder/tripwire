@@ -41,15 +41,18 @@ def config_at(cfg: Config, ref: str, into: Path) -> Config:
     """The project as it was at a git ref, unpacked into a scratch directory."""
     if ref.startswith("-"):  # git would read it as an option, e.g. --output=<any file>
         raise ValueError(f"not a git ref: {ref!r}")
+    # The whole repository, not only the config's folder: a config may sit in a
+    # subdirectory and point at datasets and prompts beside it.
+    top, inside = _git(cfg, "rev-parse", "--show-toplevel"), _git(cfg, "rev-parse", "--show-prefix")
     done = subprocess.run(
-        ["git", "archive", "--format=tar", ref], cwd=cfg.root, capture_output=True, check=False
+        ["git", "archive", "--format=tar", ref], cwd=top, capture_output=True, check=False
     )
     if done.returncode:
         raise ValueError(f"cannot read git ref {ref!r}: {done.stderr.decode().strip()}")
     into.mkdir(parents=True)
     with tarfile.open(fileobj=io.BytesIO(done.stdout)) as archive:
         archive.extractall(into, filter="data")
-    at = load_config(into / "tripwire.toml")
+    at = load_config(into / inside / cfg.file)
     at.db = str(cfg.db_path)  # old files, live database
     return at
 

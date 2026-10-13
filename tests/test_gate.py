@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 from tripwire import report, store
 from tripwire.cli import app
 from tripwire.compare import blocked, compare
-from tripwire.config import SuiteCfg
+from tripwire.config import SuiteCfg, load_config
 from tripwire.gate import bisect, canary, gate
 from tripwire.models import Case
 from tripwire.providers import Mock, Response
@@ -352,3 +352,23 @@ def test_a_python_target_importing_inside_its_function_also_sees_its_own_checkou
     (repo.root / "helper.py").write_text("def go(case):\n    return 'broken'\n")
     result, _ = run_gate(repo)
     assert (result["base"], result["head"], result["verdict"]) == (1.0, 0.0, "REGRESSED")
+
+
+def test_the_gate_finds_a_config_that_is_not_at_the_root_of_the_repository(project):
+    """As examples/tripwire.toml is: in a subfolder, under its own name, pointing outside."""
+    root, sub = project.root, project.root / "sub"
+    sub.mkdir()
+    (sub / "target.toml").write_text('provider = "mock"\nmodel = "mock:0.8"\n')
+    (sub / "eval.toml").write_text(
+        'backoff = 0\n[suite.demo]\ndataset = "../data.jsonl"\ntarget = "target.toml"\nreps = 2\n'
+    )
+    (root / ".gitignore").write_text("*.db*\n")
+    git(root, "init", "-q", "-b", "main")
+    git(root, "config", "user.email", "test@example.com")
+    git(root, "config", "user.name", "Test")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "baseline")
+    cfg = load_config(sub / "eval.toml")
+    assert asyncio.run(gate(cfg, "demo", "HEAD"))[0]["verdict"] == "UNCHANGED"
+    (sub / "target.toml").write_text(WEAK)
+    assert asyncio.run(gate(cfg, "demo", "HEAD"))[0]["verdict"] == "REGRESSED"

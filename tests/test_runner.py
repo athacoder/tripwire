@@ -310,3 +310,9 @@ def test_a_run_starts_from_a_freshly_loaded_model(project):
     asyncio.run(run_suite(project, "demo", provider=Counting()))
     asyncio.run(run_suite(project, "demo", provider=Counting()))  # all cached: no model needed
     assert Counting.unloads == 1
+
+
+def test_a_config_cannot_set_its_own_location(tmp_path):
+    (tmp_path / "tripwire.toml").write_text('file = "elsewhere.toml"\n')
+    with pytest.raises(ValueError, match="not settings inside it"):
+        load_config(tmp_path / "tripwire.toml")

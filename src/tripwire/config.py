@@ -95,6 +95,7 @@ class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")  # a misspelt setting must not be ignored
 
     root: Path
+    file: str = "tripwire.toml"  # the config's own name, to find it again at another git ref
     db: str = "tripwire.db"
     bundles: str = "bundles"
     concurrency: int = 1  # local models share one GPU; raise it for hosted providers
@@ -124,7 +125,9 @@ class Config(BaseModel):
 def load_config(path: Path) -> Config:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     data["provider"] = {**_default_providers(), **data.get("provider", {})}
-    cfg = Config(root=path.resolve().parent, **data)
+    if {"root", "file"} & set(data):
+        raise ValueError("`root` and `file` are where the config is, not settings inside it")
+    cfg = Config(root=path.resolve().parent, file=path.name, **data)
     if cfg.judge:
         from .judge import Judge  # judge needs Config; import late to avoid a cycle
 
