@@ -241,7 +241,10 @@ from them. The gate runs its sides one after the other, so one owner at a time i
 
 ## Not built yet
 
-
+- Scorers for agent trajectories. A target may be any function, but every scorer here
+  grades one final answer.
+- Process isolation for python targets. One checkout at a time owns the import path,
+  which is enough while the gate runs its sides one after the other.
 - A dollar-cost column and price table: every backend in use is local and free.
 - A rate limiter for hosted APIs: retries with backoff cover the free tiers so far.
 - A pairwise judge (which of two answers is better). The three suites all have a

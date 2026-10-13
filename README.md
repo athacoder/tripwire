@@ -82,32 +82,23 @@ The method, the limits and what stopping early costs are in
 [experiments/reports/proof.md](experiments/reports/proof.md) and regenerates with
 `python experiments/proof.py`.
 
-## Status
-
-| Piece | State |
-|---|---|
-| Datasets: content-hashed cases, versioning, lint, stratified splits | done |
-| Runner: resumable, seeded, cached samples; Ollama and OpenAI-compatible backends | done |
-| Scorers, eval self-check, single-run report | done |
-| Paired comparison, verdicts, slices, guardrails, power analysis, A/A calibration | done |
-| Gate against a git ref, sample bundles, CI workflow with a pull-request comment | done |
-| LLM judge: versioned verdicts, probes with known answers, blind labelling, calibration | done |
-| Growing datasets: perturbations, model-drafted cases, TraceLens import, human review | done |
-| Two-stage gate, run queue, usage report | done |
-| Bisect, drift canary, HTML reports, dashboard | done |
-| Benchmark of the gate itself on seeded regressions | done |
-
 ## Quick start
 
-Requires Python 3.12+ and Ollama with `gemma3:4b` pulled.
+Requires Python 3.12+. The first three commands need nothing else: they run on a
+deterministic mock model.
 
 ```bash
-git clone https://github.com/athacoder/tripwire.git
-cd tripwire
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
+git clone https://github.com/athacoder/tripwire.git && cd tripwire
+pip install -e .
+tripwire compare banking banking-worse -c examples/tripwire.toml
+```
 
+That prints a `REGRESSED` verdict with its interval, slices and flipped cases, and exits
+with code 1 as a gate would. [examples/](examples/README.md) walks through the rest.
+
+With [Ollama](https://ollama.com) and `gemma3:4b` pulled, the same on a real model:
+
+```bash
 tripwire doctor                          # is the model reachable and on the GPU?
 tripwire selfcheck banking-intent        # is the eval itself sound?
 tripwire run banking-intent              # generate and score every missing sample
@@ -115,11 +106,8 @@ tripwire report banking-intent           # score with an interval, slices, worst
 tripwire compare banking-intent banking-intent-zero-shot
 ```
 
-The tests need neither Ollama nor a GPU:
-
-```bash
-pytest -q
-```
+To develop: `pip install -e ".[dev]"`, then `pytest -q`. The tests need neither Ollama
+nor a GPU.
 
 ## Gating a change
 
@@ -183,6 +171,16 @@ What to do after a verdict (find the commit, check for drift, look at the answer
 
 ## How it works
 
+```mermaid
+flowchart LR
+    IN[cases, prompts, config<br/>all in git] --> RUN[Runner]
+    RUN -->|samples, keyed by<br/>what produced them| DB[(SQLite)]
+    DB --> SC[Scorers] --> DB
+    DB --> CMP[Paired comparison] --> V{Verdict}
+    V --> G[gate: exit code,<br/>PR comment]
+    DB <-->|bundles| CI[CI re-checks the<br/>statistics, no model]
+```
+
 A **case** is one test item, identified by a hash of its input and expected answer. A
 **target** is the system under test: a prompt and a model, a Python function, or an HTTP
 endpoint. Its **fingerprint** is a hash of everything that can change its output: the
@@ -223,8 +221,10 @@ RTX 3050 laptop GPU (6 GB), `gemma3:4b`, Banking77 gate split (700 cases).
 | Two-stage gate | a whitespace-only prompt edit passed on 250 of 700 cases |
 | Prompt layout | sharing the prompt prefix between cases makes a run 2.7 times faster |
 
-These describe one model on one dataset. Throughput and the two-stage
-gate are covered in [docs/running-at-scale.md](docs/running-at-scale.md).
+These describe one model on one dataset. Each row is the output of a command on the
+stored samples: `tripwire bench` and `report` on `banking-intent`, `report` and `aa` on
+`banking-intent-aa`, and `compare banking-intent banking-intent-zero-shot`. The last two
+rows are measured in [docs/running-at-scale.md](docs/running-at-scale.md).
 
 ## Judged metrics
 
@@ -291,6 +291,49 @@ api_key_env = "GROQ_API_KEY"   # the variable's name; the key itself is never st
   structured extraction. Expected answers are built from the same parameters that render
   each invoice, so no model or annotator produced them.
 
+## Limits
+
+- **Offline only.** It compares two configurations on a fixed set of cases. It says
+  nothing about live traffic that the cases do not resemble.
+- **The benchmark is the author's own.** Its seeded changes, the gate and the analysis come
+  from one person, for one 4B model on one dataset. It measures the gate's statistics, not
+  every regression a team will meet. See [its limits](docs/benchmark.md#limits).
+- **The judge has not been measured against people.** It is checked against constructed
+  answers and against a rule; no human labels have been collected.
+- **Stopping early costs something.** On changes that move few answers, a 250-case first
+  look calls a real drop of under a point `REGRESSED` in 7 to 14% of gates.
+- **CI verifies the statistics, not the generation.** It trusts that committed samples
+  came from the model they name.
+- **Repeatable means the same cases, in the same order, from a freshly loaded Ollama
+  model.** Through an OpenAI-compatible API Tripwire can neither force that nor check that
+  a prompt fits the context window.
+- **A cut-off answer is not scored.** It counts towards the truncation guardrail and the
+  `INVALID` limit, so a suite without that guardrail can lose up to 2% of its answers.
+- **Banking77 is public and its labels are noisy**, and the two synthetic tasks are small.
+- **One user, one machine.** No accounts, no server, no job queue beyond `tripwire queue`.
+  Latency is measured on a laptop and only loosely comparable between days.
+
+## Not built
+
+Group-sequential boundaries in place of the even alpha split; a pairwise judge; scorers
+for agent trajectories; a cost column and rate limiter for paid APIs; process isolation
+for Python targets. The reasons are in [docs/decisions.md](docs/decisions.md#not-built-yet).
+
+## Documentation
+
+| | |
+|---|---|
+| [examples/](examples/README.md) | Every command on a mock model, in five minutes |
+| [docs/integrating.md](docs/integrating.md) | Your own cases, your own prompt, function or endpoint |
+| [docs/methodology.md](docs/methodology.md) | The statistics, with every formula |
+| [docs/benchmark.md](docs/benchmark.md) | How the gate itself was measured, and the results |
+| [docs/judge.md](docs/judge.md) | The LLM judge, how it was measured, where it fails |
+| [docs/investigating.md](docs/investigating.md) | After a verdict: bisect, canary, reports, dashboard |
+| [docs/growing-datasets.md](docs/growing-datasets.md) | Perturbations, drafted cases, production failures |
+| [docs/running-at-scale.md](docs/running-at-scale.md) | Throughput, the cache, the queue, the two-stage gate |
+| [docs/architecture.md](docs/architecture.md) | What each part owns |
+| [docs/decisions.md](docs/decisions.md) | Why it is built this way |
+
 ## Layout
 
 ```text
@@ -301,9 +344,9 @@ prompts/        system and user prompts, versioned in git
 targets/        one file per system under test
 scripts/        dataset importers and generators
 tests/          run on a deterministic mock provider
+examples/       every command on the mock provider, and a Python function as a target
 experiments/    the benchmark of the gate: its variants, the replay, the reports
-docs/           methodology, the benchmark, the judge, growing datasets, running at
-                scale, investigating, design notes
+docs/           see Documentation above
 ```
 
 ## License
