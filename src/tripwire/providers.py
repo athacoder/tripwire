@@ -201,7 +201,9 @@ class Mock(Provider):
         right = r.expected if isinstance(r.expected, str) else json.dumps(r.expected)
         text = right if passed else "wrong"
         if r.format:  # asked for a structured verdict: play the judge
-            verdict = "yes" if passed else "no"
+            # A judge that never fails the mock's own wrong answer would make a judged
+            # suite blind to a weaker target.
+            verdict = "yes" if passed and "\nwrong\n" not in r.user else "no"
             text = json.dumps({"evidence": "mock", "reasoning": "mock", "verdict": verdict})
         return Response(text=text, model=r.model, latency_ms=0.0)
 
