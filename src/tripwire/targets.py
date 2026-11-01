@@ -33,8 +33,8 @@ def _enter_checkout(root: Path) -> None:
     was imported from them is forgotten. Only modules found directly under a checkout
     count: a virtual environment or a `src/` folder inside it is left alone.
 
-    ponytail: one checkout at a time. The gate runs its sides one after the other, so this
-    holds; running two checkouts concurrently in one process would need subprocesses.
+    One checkout at a time: the gate runs its sides one after the other, so this holds.
+    Running two checkouts concurrently in one process would need subprocesses.
     """
     here = str(root)
     for other in _checkouts - {here}:
