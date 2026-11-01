@@ -188,6 +188,13 @@ compared with each other would bury the few that describe the product, and a bar
 `tripwire queue` would run all of them. Both files point at the same database, so the
 baseline's samples are shared rather than generated twice.
 
+## The benchmark keeps its own copy of the prompts
+
+`experiments/prompts/` holds the prompts the benchmark measured, and the zoo is built from
+those, not from `prompts/`. Built from the live files, the first pull request that edited a
+prompt failed the test suite, for a tool whose purpose is to gate exactly that edit. A
+benchmark describes a fixed thing; the product's prompt is free to move on.
+
 ## The benchmark draws cases with replacement
 
 The gate is replayed on random draws from the 1,500 reference cases. Drawing subsets
