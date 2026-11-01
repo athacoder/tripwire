@@ -1,18 +1,21 @@
 """The public demo: the dashboard over the benchmark's results, read-only.
 
-Streamlit Community Cloud runs this file. A checkout has no results database (it is not
-in git), so the packed copy made by scripts/make_demo_db.py is unpacked in its place. On
-a machine that has its own tripwire.db, that one is used and nothing is overwritten.
+Streamlit Community Cloud runs this file. It installs requirements.txt, not this package,
+so the package is imported from src/. A checkout has no results database (it is not in
+git), so the packed copy made by scripts/make_demo_db.py is unpacked in its place. On a
+machine that has its own tripwire.db, that one is used and nothing is overwritten.
 """
 
 import gzip
 import os
 import runpy
 import shutil
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent
 DATABASE = ROOT / "tripwire.db"
+sys.path.insert(0, str(ROOT / "src"))
 
 if not DATABASE.exists():
     with gzip.open(ROOT / "demo" / "tripwire-demo.db.gz") as packed, DATABASE.open("wb") as out:

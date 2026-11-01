@@ -1,7 +1,7 @@
 kind = "prompt"
 provider = "local"
 system = "zoo/zoo-whitespace.system.md"
-template = "../prompts/banking_intent/user.md"
+template = "prompts/banking_intent/user.md"
 model = "gemma3:4b"
 temperature = 0.7
 num_ctx = 4096

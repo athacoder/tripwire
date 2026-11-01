@@ -1008,7 +1008,7 @@ def dashboard(
     """Explore results in the browser: history, comparisons, flips, speed, judge, power."""
     _load(config)  # a broken config should fail here, not inside the page
     if importlib.util.find_spec("streamlit") is None:
-        message = 'the dashboard needs Streamlit: pip install "tripwire-eval[dashboard]"'
+        message = 'the dashboard needs Streamlit: pip install -e ".[dashboard]"'
         typer.secho(f"error: {message}", fg=typer.colors.RED, err=True)
         raise typer.Exit(2)
     page = Path(__file__).with_name("dashboard.py")

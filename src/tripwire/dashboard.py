@@ -3,7 +3,7 @@
     tripwire dashboard                                  # the project in this directory
     tripwire dashboard -c experiments/zoo.toml --read-only
 
-It needs the optional dependency: pip install "tripwire-eval[dashboard]". Every number
+It needs the optional dependency: pip install -e ".[dashboard]". Every number
 shown comes from the same functions the command line uses; nothing is computed twice in
 two different ways.
 """

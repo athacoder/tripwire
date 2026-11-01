@@ -110,7 +110,7 @@ it reaches the page.
 ### The dashboard
 
 ```bash
-pip install "tripwire-eval[dashboard]"
+pip install -e ".[dashboard]"          # from a clone of this repository
 tripwire dashboard                                   # this directory's tripwire.toml
 tripwire dashboard -c experiments/zoo.toml --read-only
 ```

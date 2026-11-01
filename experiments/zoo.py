@@ -18,7 +18,10 @@ from typing import Any
 from tripwire import datasets
 
 HERE = Path(__file__).parent
-PROMPTS, DATA = HERE.parent / "prompts", HERE.parent / "datasets"
+# The benchmark's own copy of the prompts it measured. The zoo must not move when the
+# product's prompt is edited: stored samples are keyed by this text, and the results in
+# reports/ describe it.
+PROMPTS, DATA = HERE / "prompts", HERE.parent / "datasets"
 HARMFUL, HARMLESS, HELPFUL, SWAP = "harmful", "harmless", "helpful", "model swap"
 
 GUARDRAILS = """
@@ -332,7 +335,7 @@ def write(root: Path = HERE) -> None:
                     paths[kind] = f"zoo/{v.name}.{kind}.md"
                 else:
                     source = text or PROMPTS / task.prompts / f"{kind}.md"
-                    paths[kind] = "../" + source.relative_to(HERE.parent).as_posix()
+                    paths[kind] = source.relative_to(HERE).as_posix()
             fields = {
                 "kind": "prompt",
                 "provider": "local",
