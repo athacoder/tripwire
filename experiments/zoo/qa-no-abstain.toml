@@ -1,7 +1,7 @@
 kind = "prompt"
 provider = "local"
-system = "../prompts/policy_qa/system_no_abstain.md"
-template = "../prompts/policy_qa/user.md"
+system = "prompts/policy_qa/system_no_abstain.md"
+template = "prompts/policy_qa/user.md"
 model = "gemma3:4b"
 temperature = 0.7
 num_ctx = 2048
