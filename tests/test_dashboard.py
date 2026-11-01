@@ -1,4 +1,5 @@
 import asyncio
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -75,7 +76,8 @@ def test_every_view_renders_on_a_scored_project(two_targets, monkeypatch):
 
     for view in ("Speed and quality", "Power"):
         open_page(two_targets, monkeypatch, view)
-    assert "12 of 12" in str(open_page(two_targets, monkeypatch, "Drift").dataframe[0].value)
+    drift = open_page(two_targets, monkeypatch, "Drift").dataframe[0].value
+    assert "12 of 12" in drift["identical answers"].tolist()
     assert "No suite in this project" in text(open_page(two_targets, monkeypatch, "Judge"))
 
 
@@ -96,3 +98,11 @@ def test_a_judged_project_shows_the_judge_and_takes_labels(qa, monkeypatch):  # 
 
     closed = open_page(qa, monkeypatch, "Label", read_only=True)
     assert "switched off" in text(closed) and not closed.button
+
+
+def test_the_public_demo_installs_what_the_package_needs():
+    root = Path(__file__).parent.parent
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    declared = {*project["dependencies"], *project["optional-dependencies"]["dashboard"]}
+    lines = (root / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    assert {line for line in lines if line and not line.startswith("#")} == declared
