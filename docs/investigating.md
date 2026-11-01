@@ -67,8 +67,27 @@ Tripwire: PASS · canary · banking-intent
 exact.pass   base 0.580   head 0.580   Δ +0.000   [+0.000, +0.000]
 ```
 
-That upgrade did not move this model on this prompt. It is one upgrade; the point of the
-canary is that the next one is a one-minute check and not an assumption.
+That upgrade did not move this model on this prompt. The next one did. Under 0.40.6, three
+weeks later:
+
+```text
+138 of 150 answers are identical to the reference pinned on 2026-10-11 (runtime then 0.35.1, now 0.40.6)
+Tripwire: PASS · canary · banking-intent
+exact.pass   base 0.580   head 0.593   Δ +0.013   [+0.000, +0.040]
+0 broke · 2 fixed · 87 stable pass · 61 stable fail
+```
+
+Nothing in the project had changed, and three runs under 0.40.6 gave the same 150 answers
+as each other, so the cause is the runtime and not sampling. Of the 12 changed answers, 5
+differ only in trailing whitespace and 7 in their text; two scores moved, both up. The
+verdict is `PASS`, so that upgrade is acceptable, and `tripwire canary banking-intent --pin`
+made it the new reference. It reads 150 of 150 again.
+
+The sample cache does not know the runtime. A fingerprint holds the model's digest, not
+Ollama's version, so after an upgrade the gate compares a stored baseline from the old
+runtime with a candidate from the new one. The canary measures how much that adds: here,
+under 1 point of a 3-point margin. If it were large, give the target a new `salt` and
+regenerate the baseline.
 
 ### What it takes for a rerun to be identical
 
