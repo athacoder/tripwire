@@ -127,6 +127,21 @@ And the final held-out probe result, with the two new kinds included:
 
 Under the reworded rubric 2.8% of `correct` and 2.7% of `grounded` verdicts change.
 
+The same probes under Ollama 0.40.6 (the table above is 0.35.1), with the same judge model
+and the same wording:
+
+| Criterion | Verdicts | Agreement | κ (90% interval) | Passes a true pass | Fails a true fail |
+|---|---|---|---|---|---|
+| `correct` | 180 | 97.8% | 0.95 [0.91, 0.99] | 100% | 96.4% |
+| `grounded` | 112 | 98.2% | 0.96 [0.92, 1.00] | 95.8% | 100% |
+
+`correct` did not move. `grounded` gained one error, on one sentence that two probes share:
+it now fails "Standard members get free shipping on orders above $173", which is in the
+documents, saying the answer "includes a condition for Plus members". The error repeats on
+every run. A judge's version covers its model name and its words, not the runtime, so an
+upgrade can change verdicts without changing the version; stored verdicts are not
+re-judged. `tripwire canary` on a judged suite is how to notice.
+
 ### What it still gets wrong
 
 **Denials.** Given "Members on that tier do not get this at all" for a question the
