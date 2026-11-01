@@ -37,6 +37,14 @@ Broke (top 10 of 59)
 
 The second run of the same command makes zero model calls: every sample is cached.
 
+![The gate on two pull requests, from the change to the verdict](docs/media/gate-on-a-pull-request.gif)
+
+Both outcomes are live on GitHub as open pull requests, each with the gate's report as a
+comment. [This one](https://github.com/athacoder/tripwire/pull/1) removes the examples and
+is blocked. [This one](https://github.com/athacoder/tripwire/pull/2) only reformats the
+prompt and passes on the first 250 cases. CI has no model and no GPU: it reloads the samples
+committed in `bundles/` and redoes the statistics.
+
 ## Verdicts
 
 The candidate has to show it is *not worse than the baseline by more than a margin you
@@ -217,7 +225,7 @@ RTX 3050 laptop GPU (6 GB), `gemma3:4b`, Banking77 gate split (700 cases).
 | Where the variance is | 96% between cases, 4% within: add cases, not repetitions |
 | A/A false-alarm rate | 4.4% over 500 self-comparisons (nominal ceiling 10%) |
 | Few-shot examples removed | Δ −0.046 [−0.067, −0.024], `REGRESSED` |
-| Two-stage gate | a whitespace-only prompt edit passed on 250 of 700 cases |
+| Two-stage gate | a formatting-only prompt edit [passed on 250 of 700 cases](https://github.com/athacoder/tripwire/pull/2) |
 | Prompt layout | sharing the prompt prefix between cases makes a run 2.7 times faster |
 
 These describe one model on one dataset. Each row is the output of a command on the
@@ -233,7 +241,7 @@ measured before it is believed ([docs/judge.md](docs/judge.md)):
 
 | Check (judge `qwen2.5:7b`, answers from `gemma3:4b`) | Result |
 |---|---|
-| Held-out probes: answers built to be right or wrong in ten known ways | `correct` κ 0.95, `grounded` κ 1.00 |
+| Held-out probes: answers built to be right or wrong in ten known ways | `correct` κ 0.95, `grounded` κ 0.96 under Ollama 0.40.6 (1.00 under 0.35.1) |
 | Agreement with an independent rule on 240 real answers | 99.2%, κ 0.95 |
 | Verdicts that change under a reworded rubric | 2.8% and 2.7% |
 | Known weakness | passes an answer that denies a policy exists when the documents are silent |
@@ -245,7 +253,7 @@ all, not more careful wording.
 A judged regression, caught with slices: dropping the "say so if the documents do not
 cover it" instruction took `judge.correct` from 0.904 to 0.775 (Δ −0.129, interval
 [−0.171, −0.092]). Answerable questions did not move; unanswerable ones fell by more than
-half.
+half (`tripwire compare policy-qa policy-qa-no-abstain`).
 
 No human labels have been collected yet. `tripwire label` and `tripwire judge calibrate`
 are ready for them.
@@ -255,7 +263,8 @@ are ready for them.
 `tripwire dataset perturb` adds variants of each case whose answer must not change, and
 reports pair every variant with its original. On Banking77 no perturbation moved the
 average score detectably, yet 7–10% of individual answers changed under a typo, lower
-case or an irrelevant extra sentence, against 1.9% from simply re-running the prompt.
+case or an irrelevant extra sentence, against 1.9% from simply re-running the prompt
+(`tripwire report banking-intent-robust`).
 
 New cases can also be drafted by a model or imported from failures that
 [TraceLens](https://github.com/athacoder/tracelens) diagnosed. Both produce candidates
@@ -304,8 +313,10 @@ api_key_env = "GROQ_API_KEY"   # the variable's name; the key itself is never st
 - **CI verifies the statistics, not the generation.** It trusts that committed samples
   came from the model they name.
 - **Repeatable means the same cases, in the same order, from a freshly loaded Ollama
-  model.** Through an OpenAI-compatible API Tripwire can neither force that nor check that
-  a prompt fits the context window.
+  model, on the same runtime version.** One upgrade changed 12 of 150 answers, and the
+  sample cache does not know the runtime; [the canary](docs/investigating.md) is how to
+  notice. Through an OpenAI-compatible API Tripwire can neither force a fresh load nor
+  check that a prompt fits the context window.
 - **A cut-off answer is not scored.** It counts towards the truncation guardrail and the
   `INVALID` limit, so a suite without that guardrail can lose up to 2% of its answers.
 - **Banking77 is public and its labels are noisy**, and the two synthetic tasks are small.
